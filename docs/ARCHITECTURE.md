@@ -6,74 +6,69 @@
 flowchart LR
   Browser[Public browser]
   Pages[GitHub Pages: React app]
-  Worker[Cloudflare Worker API]
-  D1[(Cloudflare D1 metadata)]
-  R2[(Private Cloudflare R2 objects)]
-  Cron[15-minute cleanup trigger]
+  Function[Supabase Edge Function: pastebox-upload]
+  DB[(Supabase Postgres: public.files)]
+  Bucket[(Private Supabase Storage: pastebox-files)]
   Browser --> Pages
-  Pages -->|JSON and multipart requests| Worker
-  Worker --> D1
-  Worker --> R2
-  Cron --> Worker
-  Worker -->|Expired object and row cleanup| R2
-  Worker -->|Expired object and row cleanup| D1
+  Pages -->|GET list; POST multipart upload; GET download query| Function
+  Function --> DB
+  Function --> Bucket
+  Function -->|File attachment| Browser
 ```
 
-GitHub Pages serves only the compiled interface. It does not host the API or receive uploaded file bytes. The browser sends file uploads to the Worker. The Worker is the only application component that uses D1 and R2 bindings.
+GitHub Pages serves the compiled interface only. It does not store uploaded files. The browser calls the public Edge Function endpoint; the function performs privileged database and Storage operations server-side. The browser must never receive a service-role key.
 
 ## Frontend
 
-- `src/App.tsx` contains the Upload and View tabs, client-side checks, upload request, metadata list, countdown, and download links.
-- `src/styles.css` contains the responsive interface styles.
+- `src/App.tsx` contains the Upload and View tabs, input checks, upload request, metadata list, countdown, and download links.
+- `src/styles.css` contains responsive interface styles.
 - `vite.config.ts` sets the project-site base path to `/PASTEBOX/`.
-- The frontend receives `VITE_API_URL` at build time. Vite embeds this value in the public JavaScript bundle, so it must be a URL only, never a credential.
-- If `VITE_API_URL` is unset, the UI displays a backend-not-connected message. The site is still useful for reviewing the interface, but uploads do not persist.
+- `VITE_API_URL` is injected at build time and embedded in the public JavaScript. It must contain only the function URL, never a credential.
+- If `VITE_API_URL` is unset, the interface displays a storage-not-connected state.
 
-## Worker API
+## Supabase Edge Function
 
-`worker/src/index.ts` handles all application data operations:
+The deployed function is named `pastebox-upload`. Its current contract is:
 
-- Parses multipart form uploads and validates required fields.
-- Enforces the 25 MiB file limit and rejects empty files.
-- Creates random UUID identifiers and opaque object keys.
-- Writes file bytes to R2 and metadata to D1.
-- Lists only records whose expiry timestamp is later than the server's current time.
-- Verifies the same expiry condition before a download and serves data as `application/octet-stream` attachments.
-- Adds CORS headers for the configured Pages origin and local development.
-- Removes expired objects and rows from a 15-minute scheduled task. A list request also starts best-effort cleanup.
+- `GET /`: return active file metadata.
+- `POST /`: accept multipart fields `file`, `name`, and `purpose`; validate and store the object and metadata.
+- `GET /?download=<id>`: check expiry and return the file as a download.
+- Expired records must be excluded from listings and downloads rejected.
+- CORS must allow the public Pages origin and local development as needed.
 
-R2 object keys are generated server-side and are not exposed in list responses. The bucket must remain private; do not enable public bucket access or a public custom domain for file objects.
+The function source is currently maintained in the Supabase dashboard and is not checked into this repository. This makes reproducible deployment and review harder; preserve the exact deployed source in a repository-controlled location before future edits. Do not place secret values in that source.
 
 ## Data model
 
-The `files` table is defined in `worker/migrations/0001_create_files.sql`:
+The Postgres table `public.files` currently contains:
 
 | Column | Meaning |
 |---|---|
 | `id` | Random UUID exposed as the app's file identifier |
-| `object_key` | Private R2 object key; unique per file |
-| `original_name` | Sanitized upload filename, limited to 180 characters |
-| `uploader_name` | Self-entered name (not verified) |
-| `purpose` | Self-entered explanation |
-| `size_bytes` | File length in bytes |
-| `uploaded_at` | Server timestamp in ISO 8601 UTC |
-| `expires_at` | `uploaded_at` plus six hours, in ISO 8601 UTC |
+| `storage_path` | Unique path of the object in the private Storage bucket |
+| `original_name` | Original filename, limited to 255 characters |
+| `file_size` | File length in bytes; constrained to 1–25 MiB |
+| `uploader_name` | Self-entered, unverified display name, constrained to 1–80 characters |
+| `purpose` | Self-entered explanation, constrained to 10–240 characters |
+| `created_at` | Server timestamp, defaulting to `now()` |
+| `expires_at` | Expiry timestamp, defaulting to six hours after row creation |
 
-The application stores user-supplied name and purpose text as metadata. It does not store uploader accounts, email addresses, IP addresses, or authentication records. Cloudflare may separately process operational request logs under its own service terms and settings.
+The private bucket is named `pastebox-files` and has a 25 MiB upload limit. The function uses its server-side Supabase admin client to access the table and bucket. RLS is enabled on the table; direct public table grants and direct public Storage download policies were removed during setup.
 
-## Expiry behavior
+## Expiry and deletion
 
-Expiry has two parts:
+There are two separate behaviors:
 
-1. **Access expiry:** synchronous checks in list and download endpoints make a file disappear and deny downloads at `expires_at`, even if cleanup has not run yet.
-2. **Physical cleanup:** the Cron Trigger runs every 15 minutes and removes expired R2 objects and D1 rows in batches of up to 100. A failed cleanup is retried by a later scheduled run as long as the record remains; storage errors can delay physical removal.
+1. **Access expiry:** the function should filter out records whose `expires_at` has passed and reject downloads for them. The UI also hides records whose countdown reaches zero.
+2. **Physical deletion:** a scheduled purge must remove the expired Storage object and its database row.
 
-The six-hour period begins when the Worker accepts the upload and records `uploaded_at`. The scheduled process may remove bytes later than the expiry instant; the API will already deny access.
+The database default sets `expires_at` to six hours after row creation. However, no scheduled cleanup job has yet been configured or verified. Until it is, expired files may remain stored and incur storage use even though the app no longer exposes them. Do not describe this as guaranteed automatic deletion until the purge is implemented and tested.
 
 ## Trust boundaries
 
-- The browser and all submitted fields/files are untrusted.
-- The public API is callable by anyone, including scripts outside a browser.
-- CORS limits which web pages can read API responses in a browser; it does not block direct HTTP clients and is not access control.
-- D1 and R2 credentials are not sent to the browser. The Worker receives resource bindings from Cloudflare.
-- A public Git repository contains source code and placeholder configuration only, never runtime secrets or user files.
+- Browser input, filenames, and uploaded bytes are untrusted.
+- The function is publicly callable; anyone who can reach it can attempt uploads, listing, and downloads.
+- CORS is not authentication and does not stop direct HTTP clients.
+- RLS and private-bucket settings protect direct data access. The function's privileged key must stay server-side.
+- The repository is public and must not contain credentials, secret environment files, or user uploads.
+- Public metadata includes uploader-entered names and purposes. Do not upload confidential information.
