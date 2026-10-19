@@ -1,0 +1,20 @@
+name = "pastebox-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-19"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pastebox"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "pastebox-files"
+
+[vars]
+ALLOWED_ORIGIN = "https://nullinam.github.io"
+MAX_FILE_BYTES = "26214400"
+
+[triggers]
+crons = ["*/15 * * * *"]
