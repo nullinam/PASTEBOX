@@ -1,80 +1,106 @@
-# Deployment guide
+# Supabase setup and deployment
 
-Pastebox has a static React frontend on GitHub Pages and a Supabase Edge Function backed by Postgres and private Storage. The frontend contains only the public function URL. Never place a privileged Supabase key in this public repository or frontend.
+This guide describes how the project owner can configure the service. The implementation work does not connect to or modify the live Supabase project, deploy Edge Functions, or publish GitHub Pages. Review the SQL and function code before applying it.
 
 ## Prerequisites
 
-- Access to the GitHub repository `nullinam/PASTEBOX`.
-- A Supabase project with the `public.files` table, private `pastebox-files` bucket, and deployed `pastebox-upload` Edge Function.
-- Node.js 22 or newer for local frontend development.
+- GitHub access to `nullinam/PASTEBOX`.
+- A Supabase project and permission to manage its database, Storage, Edge Functions, API keys, and Vault.
+- Node.js 22+ for the frontend build.
+- Supabase CLI and Docker for local Edge Function development.
 
-## 1. Configure Supabase
+## 1. Prepare the Supabase project
 
-In the Supabase project:
+From a local checkout, link the project and apply the reviewed migration:
 
-1. Create the `pastebox-files` Storage bucket and keep it private. Set its upload limit to 25 MiB.
-2. Create the `public.files` table with the fields documented in [architecture](ARCHITECTURE.md), including a unique Storage path and `expires_at` defaulting to six hours after creation.
-3. Enable Row Level Security on the table. Do not grant direct anonymous access to the table or Storage objects; the deployed function performs data operations server-side.
-4. Deploy the `pastebox-upload` Edge Function with list, multipart upload, expiry-checked download, CORS, and server-side privileged access.
-5. The function must be callable by the public app without exposing a service-role key. Keep privileged values in Supabase's server-side function environment only.
-6. Configure CORS to permit `https://nullinam.github.io`. Include local development origins only if needed.
+```sh
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
+```
 
-The deployed function source is currently dashboard-managed and is not tracked in this repository. Save a reviewed source copy in version control before changing or redeploying it, and ensure that copy contains no secret values.
+The migration creates the private 50 MiB `pastebox-files` bucket, share metadata, the private rate-limit table, RLS/revokes, and the atomic rate-limit RPC. It also removes the exact legacy public policies created for Pastebox and revokes direct access to the previous `public.files` table, preserving existing rows and Storage objects. It enables `pg_cron` and `pg_net`. Review this behavior against the live project before running `db push`.
 
-## 2. Configure GitHub Pages
+The migration is a file only until you run it; no SQL was executed during implementation.
 
-1. In GitHub, open **Settings → Pages** and select **GitHub Actions** as the source if it is not already enabled.
-2. Open **Settings → Secrets and variables → Actions → Variables**.
-3. Add or update repository variable `VITE_API_URL` with the function endpoint:
-   `https://YOUR_PROJECT_REF.supabase.co/functions/v1/pastebox-upload`
-4. Do not put a service-role key or any secret in this variable. It should contain only the public URL.
-5. In **Actions**, run **Build and deploy Pastebox**, or push a source change to `main`. A variable update does not change an already-built site; the workflow must run again.
-6. Open <https://nullinam.github.io/PASTEBOX/>.
+## 2. Set Edge Function secrets
 
-The GitHub Actions workflow injects `VITE_API_URL` while building the public JavaScript bundle.
+In Supabase **Project Settings → Edge Functions → Secrets**, create:
 
-## 3. Verify the live flow
+| Name | Value |
+|---|---|
+| `PASTEBOX_RATE_LIMIT_SECRET` | A newly generated random value with at least 32 bytes of entropy |
 
-Use harmless test content only:
+Do not prefix it with `SUPABASE_` and do not use a `VITE_` name. It HMAC-hashes a gateway-provided client IP header before the rate-limit hash is stored; it does not trust caller-provided `X-Forwarded-For`. Supabase automatically provides the API secret keys to the server runtime; do not copy a service-role/secret key into source code or frontend configuration.
 
-1. Open the function URL in a browser. A successful GET should return JSON for active files (possibly an empty list).
-2. Visit the Pages site and confirm the storage-not-connected message is absent.
-3. Upload a non-sensitive file below 25 MiB with a name and a purpose of at least 10 characters.
-4. Confirm the file appears in View with uploader, purpose, timestamp, and countdown.
-5. Download it and compare it with the original.
-6. Verify that an expired item is omitted and its download is denied.
-7. **Physical deletion is not yet automated.** Do not consider the retention lifecycle complete until a scheduled cleanup removes both the Storage object and its metadata row and this removal is verified.
+The `pastebox-cleanup` function uses `@supabase/server` with `auth: 'secret'`. The deployment config disables the platform's legacy JWT-only check so the function SDK can validate the secret API key itself. Keep cleanup on the secret auth mode; never change it to `none` or `publishable`.
 
-Do not upload confidential or malicious test files. Pastebox does not scan uploads.
+## 3. Deploy the two Edge Functions
 
-## Local frontend development
+The function source is now versioned in this repository:
 
-From the repository root:
+```sh
+supabase functions deploy pastebox-upload
+supabase functions deploy pastebox-cleanup
+```
+
+`supabase/config.toml` sets `verify_jwt = false` for both functions because `@supabase/server` enforces their respective key modes: public publishable key for the share API, secret key for cleanup. Check Supabase logs after deployment. Do not test with real private files.
+
+## 4. Configure Vault and scheduled cleanup
+
+In Supabase **Database → Vault**, create these secrets:
+
+| Vault name | Value |
+|---|---|
+| `pastebox_project_url` | `https://YOUR_PROJECT_REF.supabase.co` |
+| `pastebox_cron_api_key` | A Supabase secret API key from the project API Keys page; never use the publishable key here |
+
+Vault keeps the cron credential server-side. Do not put either value in the repository, a GitHub variable, frontend environment, or tracked SQL file.
+
+After confirming both Vault values, run `supabase/schedules/pastebox-cleanup.sql` once in the Supabase SQL Editor. It schedules cleanup every five minutes. Check Supabase **Integrations → Cron** or `cron.job_run_details` to confirm successful invocations and monitor failures. If this job cannot authenticate, verify the Vault secret name/value and that `pastebox-cleanup` remains in secret auth mode.
+
+## 5. Configure GitHub Pages build variables
+
+The Pages workflow only builds on `main` pushes or manual runs. Do not merge or manually run it until you are ready to publish.
+
+In GitHub **Settings → Secrets and variables → Actions → Variables**, set:
+
+| Variable | Value |
+|---|---|
+| `VITE_API_URL` | `https://YOUR_PROJECT_REF.supabase.co/functions/v1/pastebox-upload` |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (`sb_publishable_…`) |
+
+These are public values: Vite embeds them in the site. Never put a secret/service-role key in an Actions variable. The publishable key does not grant database or Storage access because RLS, grants, and bucket policies deny visitor access.
+
+To build locally, copy `.env.example` to `.env.local`, fill the same two public values, then run:
 
 ```sh
 npm install
+npm run build
 ```
 
-Create an ignored local `.env.local` containing the public function URL:
+The real `.env.local` is ignored by Git. Do not commit it.
 
-```text
-VITE_API_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/pastebox-upload
-```
+## 6. Verify before publishing
 
-Then run:
+Use harmless test files on a non-production project first:
 
-```sh
-npm run dev
-```
-
-Local browser requests also need to be allowed by the function's CORS configuration. Do not put any privileged key in `.env.local` or expose it to Vite.
+1. Check the bucket is private and capped at 50 MiB.
+2. Confirm the table has RLS enabled and no public policies or grants. Try direct table and Storage access with a publishable key and confirm it is denied.
+3. Upload a small harmless file; verify the resulting row contains a token hash but not the share token, and that no list endpoint exposes it.
+4. Open the returned link in a private browser window, verify metadata and download, then test a malformed token.
+5. Test 50 MiB acceptance and rejection just above the limit, blank/placeholder name rejection, purpose under 10 characters, and repeated uploads until a 429 appears.
+6. Set a test row's expiry to the past in a non-production project and confirm resolve/download immediately fail.
+7. Invoke cleanup through the scheduled job and confirm both the Storage object and database row are removed. Check retry behavior after a failed deletion.
+8. Only then publish the frontend when ready.
 
 ## Troubleshooting
 
-- **Site says storage is disconnected:** check the GitHub Actions variable name/value and rerun the Pages workflow.
-- **`ERR_CONNECTION_CLOSED` with no HTTP status:** the browser did not receive an HTTP response. Test the function URL on another network; a managed firewall/proxy may be closing HTTPS to `YOUR_PROJECT_REF.supabase.co`. Ask the network administrator to allow outbound HTTPS (port 443) to the project's Supabase host.
-- **CORS error with an HTTP request visible:** confirm the exact Pages origin is allowed by the function and that OPTIONS preflight is handled.
-- **HTTP 401/403:** review the Edge Function's public invocation/JWT configuration. Do not solve it by putting a service-role key in the browser.
-- **HTTP 5xx or storage/database error:** inspect Supabase Edge Function logs, confirm required server-side secrets/bindings, table schema, RLS, and private bucket name.
-- **Upload fails:** confirm file size is at most 25 MiB and the private bucket limit matches. Check Edge Function logs for the server response.
-- **Expired files remain in Storage:** this is expected until a scheduled physical cleanup is implemented and verified.
+- **401/403 from public API:** check that the frontend sends the publishable key in `apikey`, `auth: 'publishable'` is set, and `verify_jwt = false` is deployed.
+- **Origin/CORS errors:** verify the exact origin `https://nullinam.github.io` and the function preflight response.
+- **503 upload protection not configured:** set `PASTEBOX_RATE_LIMIT_SECRET` in Edge Function secrets and redeploy or wait for secret propagation.
+- **429 upload:** the current limit is ten attempts per forwarded client IP per one-hour window. A shared NAT can share this limit.
+- **Expired file remains after expiry:** access should be denied immediately. Physical removal waits for the next five-minute Cron run and may retry after a Storage error.
+- **Cleanup is unauthorized:** ensure Vault's `pastebox_cron_api_key` is a Supabase secret key (not publishable) and the function remains secret-only.
+- **Large upload reliability:** the implementation uses the function API and standard Storage upload. Supabase recommends resumable transfers for files above 6 MiB; test at the intended network speeds and plan tier before treating 50 MiB uploads as production-ready.
+

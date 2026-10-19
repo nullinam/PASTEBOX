@@ -5,70 +5,80 @@
 ```mermaid
 flowchart LR
   Browser[Public browser]
-  Pages[GitHub Pages: React app]
-  Function[Supabase Edge Function: pastebox-upload]
-  DB[(Supabase Postgres: public.files)]
-  Bucket[(Private Supabase Storage: pastebox-files)]
+  Pages[GitHub Pages React app]
+  API[Supabase Edge Function pastebox-upload]
+  Cleanup[Secret-only pastebox-cleanup function]
+  DB[(RLS-protected Postgres metadata)]
+  Bucket[(Private pastebox-files Storage bucket)]
+  Cron[Supabase Cron every five minutes]
   Browser --> Pages
-  Pages -->|GET list; POST multipart upload; GET download query| Function
-  Function --> DB
-  Function --> Bucket
-  Function -->|File attachment| Browser
+  Pages -->|Upload multipart; resolve/download JSON| API
+  API --> DB
+  API --> Bucket
+  API -->|Short-lived signed attachment URL| Browser
+  Cron --> Cleanup
+  Cleanup --> DB
+  Cleanup --> Bucket
 ```
 
-GitHub Pages serves the compiled interface only. It does not store uploaded files. The browser calls the public Edge Function endpoint; the function performs privileged database and Storage operations server-side. The browser must never receive a service-role key.
+GitHub Pages serves the static React app. Supabase Edge Functions are the only application API. The browser never queries Postgres or Storage directly. The publishable API key shipped in the app identifies requests to the public function; it is not a secret and receives no direct table/bucket privileges. `ctx.supabaseAdmin` is used only inside trusted functions.
 
-## Frontend
+## Upload lifecycle
 
-- `src/App.tsx` contains the Upload and View tabs, input checks, upload request, metadata list, countdown, and download links.
-- `src/styles.css` contains responsive interface styles.
-- `vite.config.ts` sets the project-site base path to `/PASTEBOX/`.
-- `VITE_API_URL` is injected at build time and embedded in the public JavaScript. It must contain only the function URL, never a credential.
-- If `VITE_API_URL` is unset, the interface displays a storage-not-connected state.
+1. The browser validates UX fields and file size, then sends one multipart POST to `pastebox-upload`. Browser checks are convenience only.
+2. The function checks the request length when available, parses the multipart body, validates the actual `File.size` (1–52,428,800 bytes), validates name and purpose, and atomically consumes one per-IP rate-limit slot.
+3. It creates a private pending metadata row before uploading. Storage object paths are random UUIDs and are not returned to the browser.
+4. File bytes are uploaded to the private bucket as `application/octet-stream`, with overwrite disabled.
+5. After Storage succeeds, the function generates 32 cryptographically random bytes, encodes them as a URL-safe token, and stores only `SHA-256(token)` in Postgres. The record becomes active and expires exactly six hours after completed upload.
+6. The raw token is returned once to the browser and placed in a URL fragment (`#share=...`). Fragments are not included in HTTP requests or Referer headers. Do not add analytics or third-party scripts that could read the fragment.
 
-## Supabase Edge Function
+Pending rows expire after 30 minutes. The scheduled cleanup removes abandoned pending objects and rows.
 
-The deployed function is named `pastebox-upload`. Its current contract is:
+## Share and download lifecycle
 
-- `GET /`: return active file metadata.
-- `POST /`: accept multipart fields `file`, `name`, and `purpose`; validate and store the object and metadata.
-- `GET /?download=<id>`: check expiry and return the file as a download.
-- Expired records must be excluded from listings and downloads rejected.
-- CORS must allow the public Pages origin and local development as needed.
-
-The function source is currently maintained in the Supabase dashboard and is not checked into this repository. This makes reproducible deployment and review harder; preserve the exact deployed source in a repository-controlled location before future edits. Do not place secret values in that source.
+- There is no listing route or “view all files” query.
+- The browser sends the share token in a JSON POST body to resolve metadata. The backend hashes it and compares against the stored hash.
+- Metadata endpoints select only active records whose expiry is in the future. The database ID and Storage path are never returned.
+- Download requests repeat token and expiry validation. Only then does the function generate a signed Storage URL, capped at 60 seconds and never later than the file expiry. The URL forces attachment download.
+- `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and a URL fragment reduce incidental token exposure. A share link itself is a bearer credential and can still be copied, screenshotted, or exposed by the user.
 
 ## Data model
 
-The Postgres table `public.files` currently contains:
+`supabase/migrations/20261020000000_create_secure_share_links.sql` defines:
+
+### `public.pastebox_shares`
 
 | Column | Meaning |
 |---|---|
-| `id` | Random UUID exposed as the app's file identifier |
-| `storage_path` | Unique path of the object in the private Storage bucket |
-| `original_name` | Original filename, limited to 255 characters |
-| `file_size` | File length in bytes; constrained to 1–25 MiB |
-| `uploader_name` | Self-entered, unverified display name, constrained to 1–80 characters |
-| `purpose` | Self-entered explanation, constrained to 10–240 characters |
-| `created_at` | Server timestamp, defaulting to `now()` |
-| `expires_at` | Expiry timestamp, defaulting to six hours after row creation |
+| `id` | Internal random UUID; never used as the share token or returned to visitors |
+| `token_hash` | Unique SHA-256 hash of the 256-bit token; null only while a row is pending |
+| `storage_path` | Internal random object path in the private bucket |
+| `original_name` | Sanitized display/download filename |
+| `file_size` | Verified size in bytes, from 1 to 52,428,800 |
+| `uploader_name` | Self-entered display name, 2–80 characters |
+| `purpose` | Self-entered context, 10–240 characters |
+| `status` | `pending` during upload; `active` after upload succeeds |
+| `created_at` | Pending row creation time |
+| `pending_expires_at` | Abandoned-upload cleanup time |
+| `uploaded_at` | Server timestamp after Storage accepts the file |
+| `expires_at` | Exactly six hours after `uploaded_at` |
 
-The private bucket is named `pastebox-files` and has a 25 MiB upload limit. The function uses its server-side Supabase admin client to access the table and bucket. RLS is enabled on the table; direct public table grants and direct public Storage download policies were removed during setup.
+### `public.pastebox_upload_limits`
 
-## Expiry and deletion
+Stores only an HMAC-SHA-256 of the forwarded client IP, one-hour window start, and count. The HMAC key exists only as `PASTEBOX_RATE_LIMIT_SECRET` in the Edge Function environment.
 
-There are two separate behaviors:
+RLS is enabled, and `anon`/`authenticated`/`PUBLIC` have no table privileges or policies. The `consume_pastebox_upload_slot` function is executable only by `service_role`. The private Storage bucket has a 50 MiB size cap and no visitor policies. The migration drops the exact legacy Pastebox public policies and revokes direct privileges from the previous `public.files` table; it preserves old records and objects.
 
-1. **Access expiry:** the function should filter out records whose `expires_at` has passed and reject downloads for them. The UI also hides records whose countdown reaches zero.
-2. **Physical deletion:** a scheduled purge must remove the expired Storage object and its database row.
+## Expiry and physical cleanup
 
-The database default sets `expires_at` to six hours after row creation. However, no scheduled cleanup job has yet been configured or verified. Until it is, expired files may remain stored and incur storage use even though the app no longer exposes them. Do not describe this as guaranteed automatic deletion until the purge is implemented and tested.
+Link validation checks `expires_at` in trusted backend code for every resolution and download. At expiry, access is denied immediately.
+
+Supabase Cron invokes `pastebox-cleanup` every five minutes. The function requires a Supabase secret key (`auth: 'secret'`), deletes expired Storage objects first, then their rows, and deletes abandoned pending uploads. Failed Storage removals leave rows for retry. It also removes expired rate-limit rows. Physical removal may lag the six-hour access cutoff by up to one schedule interval plus provider delays.
 
 ## Trust boundaries
 
-- Browser input, filenames, and uploaded bytes are untrusted.
-- The function is publicly callable; anyone who can reach it can attempt uploads, listing, and downloads.
-- CORS is not authentication and does not stop direct HTTP clients.
-- RLS and private-bucket settings protect direct data access. The function's privileged key must stay server-side.
-- The repository is public and must not contain credentials, secret environment files, or user uploads.
-- Public metadata includes uploader-entered names and purposes. Do not upload confidential information.
+- User fields, file names, MIME types, and file bytes are untrusted. Files are stored as opaque octet-stream downloads; no scanning or previewing occurs.
+- The public upload/resolution endpoint can be called by non-browser clients. CORS is not authentication. Its publishable key is public; the application therefore relies on strict server-side validation, rate limits, RLS, and secret-only cleanup authorization.
+- Share links grant access to anyone possessing the link until expiry. The token is random, not filename- or row-derived.
+- No service key, database password, Vault secret, upload, or usable share token belongs in Git.
+

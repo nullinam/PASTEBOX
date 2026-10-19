@@ -1,41 +1,46 @@
 # Security and privacy
 
-## Public sharing is intentional
+## Link access model
 
-Pastebox is a public open-upload file board in this first version. Anyone who can reach the site and its Edge Function can attempt to:
+Pastebox has no accounts, public listing, password, or membership enforcement. Anyone with a share link can view its metadata and download its file until the six-hour expiry. Treat a share link like a password. Do not upload confidential, personal, medical, financial, or work-sensitive data.
 
-- Read active filenames, uploader names, purposes, sizes, and timestamps.
-- Download active files.
-- Upload files using any self-entered name and purpose.
+The share token is generated from 32 bytes supplied by the Web Crypto secure random generator. It is independent of the filename and database ID. Only the token's SHA-256 hash is stored. The raw token is returned once to the uploader and kept in the share URL fragment. URL fragments are not sent in the initial HTTP request or Referer header. The app sets no-referrer/no-store protections and loads no third-party analytics or font assets.
 
-There is no sign-in, membership check, password, invite code, admin role, or user-facing manual removal control. The product is not restricted to the intended friend group. Public endpoint access and automated abuse are possible.
+Anyone who can use developer tools or copy the share URL can share the capability. A 256-bit token makes guessing impractical but does not protect a leaked link.
 
-Do not upload confidential, personal, financial, medical, work-sensitive, or otherwise private files. A six-hour expiry cannot prevent recipients from keeping downloaded copies.
+## Data and storage protections
 
-## No scanning or preview
+- The `pastebox-files` bucket is private with a 50 MiB object limit.
+- Metadata and rate-limit tables have RLS enabled, no visitor policies, and no privileges for `anon`, `authenticated`, or `PUBLIC`.
+- The browser calls Edge Functions only. It never queries tables or Storage directly.
+- The public API uses a browser-safe publishable key. This does not grant table or bucket access.
+- Upload, token lookup, expiry checks, signed-download creation, and deletion run in trusted Edge Functions using `ctx.supabaseAdmin`.
+- The download URL is created only after token and expiry validation, forces an attachment, and has a maximum 60-second lifetime bounded by remaining share time.
+- The cleanup function accepts only a Supabase secret key through `@supabase/server` auth mode `secret`; the scheduler obtains that key from Supabase Vault.
+- Uploads are limited to ten attempts per forwarded client IP per hour. The stored rate-limit identifier is HMAC-SHA-256 with a server-only pepper; raw IP values are not stored.
 
-Pastebox accepts arbitrary formats and treats the bytes as opaque data. It does not scan, preview, execute, or convert files. This does not make uploaded files safe. Download only files from people you trust and use appropriate endpoint protection before opening them.
+## Opaque files, no scanning
 
-Downloads should be served as attachments with an octet-stream content type, `nosniff`, and no-store caching. These headers reduce browser rendering risk but are not malware detection.
+Pastebox accepts arbitrary formats but does not inspect or scan their content. Files are saved and returned as `application/octet-stream` attachments. Download only from people you trust and use endpoint protection before opening a file. These controls do not make malware-free guarantees.
 
-## Supabase access and credentials
+## Expiry and deletion
 
-- The Supabase Storage bucket `pastebox-files` must remain private.
-- RLS is enabled on `public.files`; direct anonymous table grants and direct public Storage download policies were removed during setup.
-- Public app operations go through the `pastebox-upload` Edge Function. Any privileged Supabase key is used only server-side by the function.
-- Never put a service-role key, secret, password, access token, or private upload in GitHub source, the frontend bundle, GitHub Actions variables, or issue reports.
-- `VITE_API_URL` is a public function URL, not a credential. It is compiled into the public site.
-- The deployed Edge Function source is currently maintained in the Supabase dashboard and is not versioned in this repository. Keep a secure, reviewed source copy for reproducible maintenance, without secret values.
+The backend denies share resolution and download once `expires_at` is reached. A scheduled job runs every five minutes and removes expired Storage objects and rows; physical removal can lag expiry by up to one schedule interval or provider delay. Pastebox cannot erase downloaded copies or copies saved elsewhere.
 
-## Limits of current protections
+## Secrets in a public repository
 
-- Uploader names are unverified; placeholder checks and purpose-length checks are input hygiene, not identity or content verification.
-- There is no rate limit, CAPTCHA, abuse reporting, per-person quota, authentication, or moderation. Public upload can be abused and storage/operation costs can increase.
-- CORS is a browser policy, not access control.
-- No malware scanner or independent security audit is provided.
-- Expired files are intended to become inaccessible after six hours, but scheduled physical deletion of Storage objects and rows is not configured yet. Do not treat expiry as verified deletion until a purge is implemented and tested.
-- The app cannot delete copies downloaded by recipients.
+- Never commit service-role/secret API keys, database passwords, Vault values, personal access tokens, real `.env` files, share tokens, or user uploads.
+- `VITE_API_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are public build-time values. Only the publishable key belongs in frontend configuration.
+- `PASTEBOX_RATE_LIMIT_SECRET` is an Edge Function secret. It must never use a `VITE_` prefix or be set as a GitHub Actions variable.
+- Supabase automatically supplies secret keys to trusted Edge Functions. Do not copy them into source code.
+- The cleanup schedule uses Vault secrets. Do not put actual values in the tracked schedule SQL or paste them into a committed file.
+- Git ignore rules exclude real `.env` files and local Supabase runtime state. `.env.example` contains placeholders only.
 
-## Reporting an issue
+## Abuse limitations
 
-Do not publish credentials, private files, or sensitive personal data in a public GitHub issue. If a credential is exposed, revoke or rotate it at Supabase first, then assess Git history, logs, and local files. Deleting the visible file alone does not invalidate a leaked credential.
+The upload and share API is intentionally public and can be called outside a browser. The per-IP limit is an abuse control, not a complete defense against distributed abuse. There is no CAPTCHA, account identity, malware scanning, moderation queue, or admin UI. Supabase billing/quota settings should be monitored.
+
+## Incident response
+
+If a secret key is exposed, revoke/rotate it in Supabase immediately, then review Git history, GitHub Actions, local copies, and logs. Removing the visible text does not invalidate a key. If a share link is exposed, its holder can access the file until expiry; remove the corresponding file/row from Supabase through an authorized owner workflow if immediate revocation is required.
+

@@ -1,87 +1,84 @@
 # Pastebox
 
-Pastebox is a public shared file board for a friend group. Visitors can upload a file with a name and purpose, view active uploads, and download files from another device.
+Pastebox lets someone upload a file and share it with a short-lived link. A recipient can open the link from another device and download the file. There is no public file listing or account system.
 
-**Live website:** <https://nullinam.github.io/PASTEBOX/>  
+**Live site:** <https://nullinam.github.io/PASTEBOX/>  
 **Repository:** <https://github.com/nullinam/PASTEBOX>
 
-## Current status
+## How it works
 
-- The React frontend is published with GitHub Pages.
-- The frontend calls a Supabase Edge Function named `pastebox-upload` for upload, list, and download operations.
-- Supabase Storage bucket `pastebox-files` is private; file operations are mediated by the Edge Function.
-- The public Supabase endpoint is configured through the GitHub Actions variable `VITE_API_URL`.
-- The app hides expired files and denies downloads after six hours.
-- **Physical automatic deletion of expired Storage objects and metadata rows is not yet configured.** Expiry currently means inaccessible through the app; it does not yet guarantee the bytes and row are deleted at six hours.
+1. The uploader selects a file up to 50 MB and enters a name and a purpose.
+2. The browser sends the file and metadata to the public Pastebox Edge Function. The function validates the actual received file size and text, rate-limits uploads, and stores file bytes in a private Supabase Storage bucket.
+3. After storage succeeds, the function creates a 256-bit random share token using the Web Crypto API. The database stores only its SHA-256 hash.
+4. Pastebox returns a share URL containing the bearer token in the URL fragment. URL fragments are not sent in the initial page request or HTTP Referer header.
+5. A share page sends the token to the backend for resolution. The backend checks the hash and expiry. No public listing or direct database access is available.
+6. On download, the backend rechecks the token and expiry, then creates a short-lived signed Storage URL with attachment disposition.
+7. Six hours after upload, link resolution and download are denied immediately. A Supabase Cron job invokes a secret-only cleanup function every five minutes to remove expired Storage objects and metadata. Physical deletion can therefore occur up to about five minutes after access expires.
 
-## How Pastebox works
+Pastebox does not scan, preview, execute, or render uploaded files. Recipients download opaque data as an attachment. Anyone who has a share link can download that file before expiry, so share links should be treated like passwords. Pastebox cannot remove copies already downloaded.
 
-1. The uploader selects one file and enters a display name and purpose.
-2. The frontend and Edge Function enforce a 25 MiB maximum; empty files are rejected.
-3. The Edge Function validates the request, stores file bytes in the private bucket, and writes metadata to `public.files`.
-4. The View tab requests active records and shows filename, purpose, uploader, timestamp, size, and remaining time.
-5. Downloads go through the Edge Function, which checks expiry before returning the file as an attachment.
-6. At six hours, the app should no longer list or serve the file. A scheduled purge still needs to be added and verified to physically remove both the Storage object and database row.
+## Product limits
 
-Pastebox cannot remove copies recipients downloaded to their own devices.
-
-## Product rules
-
-- Any file format is accepted up to 25 MiB. Empty files are rejected.
-- Files are treated as opaque data: Pastebox does not preview, execute, convert, or scan them.
-- Uploader names are self-entered and unverified. Basic checks reject short names and common placeholders.
-- Purpose is self-entered and length-checked; Pastebox does not verify its truth.
-- Anyone can upload, list, and download active files. There are no accounts, invite codes, admin role, manual delete control, or keep option.
-- Uploaded metadata is visible to anyone who can reach the public site and API.
-- No malware scanning or rate limiting is currently provided.
+- Any file format, up to 50 MB; empty and oversized files are rejected.
+- Uploader name required, 2–80 characters, trimmed; common placeholders are rejected. Names are not identity-verified.
+- Purpose required, 10–240 characters; its truth is not verified.
+- No file listing, accounts, access codes, manual-delete UI, or permanent links.
+- Upload rate limit: at most 10 attempts per client IP per one-hour window. The IP is HMAC-hashed server-side before storage; raw IP addresses are not stored in the rate-limit table.
+- Access is intentionally link-based, not restricted to a friend group. Anyone with the link can access the file for its active period.
 
 ## Technology
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Frontend | React, TypeScript, Vite | Upload and View screens, validation, list, countdown, download controls |
-| Static hosting | GitHub Pages and GitHub Actions | Build and publish the frontend |
-| API | Supabase Edge Function (`pastebox-upload`) | Validate requests; upload, list, and download |
-| Metadata | Supabase Postgres (`public.files`) | Store filename, uploader/purpose, timestamp, size, Storage path, and expiry |
-| File bytes | Supabase Storage (`pastebox-files`, private) | Store uploaded file objects |
-| Cleanup | Not configured yet | Expired files are blocked by expiry checks; physical purge remains outstanding |
+| Frontend | React, TypeScript, Vite | Accessible upload form, progress, share page, countdown, copy and download actions |
+| Static hosting | GitHub Pages and GitHub Actions | Build and publish the static frontend |
+| Public API | Supabase Edge Function `pastebox-upload` | Validate and store uploads, resolve share tokens, authorize downloads |
+| Cleanup API | Supabase Edge Function `pastebox-cleanup` | Privileged scheduled removal of expired objects and metadata |
+| Metadata | Supabase Postgres | Private share records and HMAC-keyed upload-rate windows |
+| File bytes | Private Supabase Storage bucket `pastebox-files` | Opaque file content, served only through validated share links |
+| Schedule | Supabase `pg_cron` + `pg_net` + Vault | Invoke cleanup every five minutes using a server-only Supabase secret key |
 
-See [architecture](docs/ARCHITECTURE.md), [API reference](docs/API.md), [security and privacy](docs/SECURITY.md), [deployment](docs/DEPLOYMENT.md), and [operations](docs/OPERATIONS.md).
+## Local development
 
-## Quick start
+Install Node.js 22 or newer:
 
-Install Node.js 22 or newer, then from the repository root:
 
 ```sh
 npm install
+```
+
+Copy `.env.example` to `.env.local` and set the public function endpoint and publishable key. These are public client configuration; the publishable key is safe only because RLS, table privileges, and bucket policies deny direct visitor access.
+
+```sh
 npm run dev
 ```
 
-For frontend-only development, the app can run without the service but upload/list/download require the Supabase Edge Function. Set `VITE_API_URL` to the public function endpoint when building:
+To run Edge Functions locally, install the Supabase CLI and Docker, then use the Supabase local development workflow. Put local Edge Function secrets in `supabase/functions/.env`; this file is ignored by Git. Never place service-role or secret keys in Vite variables.
 
-```text
-VITE_API_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/pastebox-upload
-```
+## Supabase setup and deployment
 
-See [deployment](docs/DEPLOYMENT.md) for the Supabase and GitHub Pages setup.
+Read [deployment](docs/DEPLOYMENT.md) before configuring the project. The migration and schedule files are source files only; this implementation does not connect to or modify the live Supabase project. You must review and apply the migration, add Edge Function secrets, deploy both functions, configure Vault and Cron, and set GitHub Actions variables before the new application works.
 
-## Public repository and sensitive configuration
+The GitHub Pages workflow publishes only pushes to `main` and manual runs. Work on a feature branch to avoid publishing while configuring this change.
 
-This repository is public. Do not commit service-role keys, Supabase secrets, passwords, tokens, private uploads, or real user data. The function endpoint URL is public configuration, not a secret; it is embedded in the frontend bundle. GitHub Actions stores it as a repository variable named `VITE_API_URL`.
+## Security and privacy
 
-Any privileged Supabase key must remain in Supabase's server-side Edge Function environment and must never be placed in frontend code, GitHub Pages assets, repository variables, or committed files. The database and Storage bucket should remain protected by RLS and private-bucket settings; the public app accesses them through the function.
+Review [security](docs/SECURITY.md), [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and [operations](docs/OPERATIONS.md). Never commit real `.env` files, service-role/secret keys, database passwords, Vault values, share tokens, or uploaded files. The repository is public.
 
 ## Repository map
 
 ```text
-src/                         React user interface
-.github/workflows/pages.yml  GitHub Pages build/deploy workflow
-docs/                        Architecture, API, security, deployment, operations
-.env.example                 Public function endpoint template
+src/                              React user interface
+supabase/config.toml              Edge Function auth-mode settings
+supabase/functions/               Public API and secret-only cleanup function source
+supabase/migrations/              RLS, private bucket, share metadata, rate-limit schema
+supabase/schedules/               Cron job SQL template; no secret values
+.github/workflows/pages.yml       GitHub Pages workflow, main branch only
+docs/                             Architecture, API, security, deployment, operations
+.env.example                      Placeholder-only public frontend configuration
 ```
-
-The deployed Edge Function source is currently managed in the Supabase dashboard and is not versioned in this repository. Keep a reviewed source copy in the repository before making future function changes.
 
 ## License
 
-No license is currently declared. Until a license is added, do not assume this project is available for reuse or redistribution.
+No license is currently declared. Until one is added, do not assume this project is available for reuse or redistribution.
+
