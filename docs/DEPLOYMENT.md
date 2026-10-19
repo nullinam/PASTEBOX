@@ -31,7 +31,7 @@ In Supabase **Project Settings → Edge Functions → Secrets**, create:
 |---|---|
 | `PASTEBOX_RATE_LIMIT_SECRET` | A newly generated random value with at least 32 bytes of entropy |
 
-Do not prefix it with `SUPABASE_` and do not use a `VITE_` name. It HMAC-hashes the forwarded client IP before the rate-limit hash is stored. Supabase automatically provides the API secret keys to the server runtime; do not copy a service-role/secret key into source code or frontend configuration.
+Do not prefix it with `SUPABASE_` and do not use a `VITE_` name. It HMAC-hashes a gateway-provided client IP header before the rate-limit hash is stored; it does not trust caller-provided `X-Forwarded-For`. Supabase automatically provides the API secret keys to the server runtime; do not copy a service-role/secret key into source code or frontend configuration.
 
 The `pastebox-cleanup` function uses `@supabase/server` with `auth: 'secret'`. The deployment config disables the platform's legacy JWT-only check so the function SDK can validate the secret API key itself. Keep cleanup on the secret auth mode; never change it to `none` or `publishable`.
 
