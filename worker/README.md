@@ -1,36 +1,34 @@
-# Pastebox API
+# Pastebox Worker
 
-The Worker keeps R2 private and is the only path to upload or download files. D1 contains metadata only. No credential is needed in the frontend or repository.
+The Cloudflare Worker is Pastebox's API. It binds a private D1 database (`DB`) and private R2 bucket (`FILES`) and handles upload, public listing, download, expiry checks, and scheduled cleanup.
 
-## Provision
+## Behavior
 
-1. Install Node.js 22 or newer and authenticate Wrangler with `npx wrangler login`.
-2. Create the resources:
+- `GET /api/health` checks Worker reachability.
+- `GET /api/files` returns up to 200 unexpired records.
+- `POST /api/files` accepts multipart `file`, `name`, and `purpose` fields; files must be non-empty and at most 25 MiB.
+- `GET /api/files/{uuid}/download` serves an attachment only while unexpired.
+- The Worker calculates expiry as server upload receipt time plus six hours.
+- The Cron Trigger is scheduled every 15 minutes. It deletes expired R2 objects and corresponding D1 rows in batches. API expiry checks make files unavailable before physical cleanup runs.
+- There is no scan, authentication, admin, manual delete endpoint, rate limiting, or abuse moderation.
 
-   ```sh
-   npx wrangler d1 create pastebox
-   npx wrangler r2 bucket create pastebox-files
-   ```
+## Setup
 
-3. Copy the returned D1 `database_id` into `database_id` in `wrangler.toml`. This ID is resource configuration, not a secret. Keep account API tokens out of this file.
-4. Apply the schema and deploy:
+Follow the full [deployment guide](../docs/DEPLOYMENT.md). Important configuration rule: keep account-specific settings local in ignored `wrangler.local.toml`; do not replace the placeholder in tracked `wrangler.toml` with an account-specific value.
 
-   ```sh
-   npx wrangler d1 migrations apply pastebox --remote
-   npx wrangler deploy
-   ```
+The D1 binding ID is not an authentication secret, but this project keeps even that account-specific identifier out of the public repo. Wrangler login credentials are stored outside the repository. The public frontend needs only the Worker URL in the GitHub Actions variable `VITE_API_URL`.
 
-5. Set `ALLOWED_ORIGIN` in `wrangler.toml` to the published Pages origin (normally `https://nullinam.github.io`).
-6. In the GitHub repository settings, add the Actions **variable** `VITE_API_URL` with the Worker base URL, such as `https://pastebox-api.<your-subdomain>.workers.dev`.
+The D1 schema is in [`migrations/0001_create_files.sql`](migrations/0001_create_files.sql). The detailed endpoint definitions are in [the API reference](../docs/API.md), and security limitations are in [SECURITY.md](../docs/SECURITY.md).
 
-The API URL is public configuration, not a key. D1 and R2 access is provided by Worker bindings. Never add Cloudflare API tokens, database passwords, or file data to the repository. For local development, use `npx wrangler dev` from this directory and set the frontend `.env.local` `VITE_API_URL` to `http://localhost:8787`.
+## Resource bindings
 
-## Behavior and limits
+| Binding | Resource | Purpose |
+|---|---|---|
+| `DB` | Cloudflare D1 | File metadata and expiry timestamps |
+| `FILES` | Cloudflare R2 | Private file bytes |
 
-- `POST /api/files` accepts multipart fields `file`, `name`, and `purpose`.
-- Files are limited to 25 MiB, stored as opaque bytes, and served only as downloads.
-- Uploaders enter unverified names. Names must be 2–60 characters and cannot be common placeholder values. Purpose must be 10–240 characters.
-- `GET /api/files` returns only unexpired metadata. `GET /api/files/:id/download` denies expired files even if scheduled cleanup has not run yet.
-- A 15-minute Cron Trigger removes expired R2 objects and D1 rows. The API hides files at the exact expiry time; physical cleanup follows on the next scheduled run.
-- This first version deliberately has no malware scanning, user accounts, admin, or manual delete feature. Anyone with access to the public site can download a file during its six-hour window.
-- Configure `ALLOWED_ORIGIN` to the one Pages origin. Localhost origins are permitted for development only.
+Do not make the R2 bucket public. The application intentionally serves objects through a Worker route that checks expiry and sets download-safe response headers.
+
+## Configuration template
+
+`wrangler.toml` is tracked and contains only a placeholder D1 ID. Copy it to ignored `wrangler.local.toml` and use that local file with Wrangler's `--config` option for migrations and deployment. `.gitignore` excludes the local configuration. Do not commit it.

@@ -9,4 +9,5 @@ worker/.dev.vars
 worker/.env
 worker/.env.*
 !worker/.env.example
+worker/wrangler.local.toml
 *.log
