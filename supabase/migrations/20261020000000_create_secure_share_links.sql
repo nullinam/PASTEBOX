@@ -91,9 +91,15 @@ grant execute on function public.consume_pastebox_upload_slot(text) to service_r
 
 -- Close the earlier direct-public metadata and Storage policies created during setup.
 -- Existing rows and objects are preserved; only direct anonymous access is removed.
-alter table if exists public.files enable row level security;
-revoke all on table public.files from public, anon, authenticated;
-drop policy if exists "Anyone can view unexpired file details" on public.files;
+do $$
+begin
+  if to_regclass('public.files') is not null then
+    execute 'alter table public.files enable row level security';
+    execute 'revoke all on table public.files from public, anon, authenticated';
+    execute 'drop policy if exists "Anyone can view unexpired file details" on public.files';
+  end if;
+end;
+$$;
 drop policy if exists "Anyone can download Pastebox files" on storage.objects;
 
 comment on table public.pastebox_shares is
