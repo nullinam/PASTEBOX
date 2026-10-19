@@ -58,8 +58,9 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function rateLimitHash(request: Request): Promise<string | null> {
-  const forwarded = request.headers.get('x-forwarded-for')
-  const clientIp = forwarded?.split(',')[0]?.trim()
+  // Prefer gateway-provided IP headers; never trust a caller-controlled X-Forwarded-For value.
+  const clientIp = request.headers.get('cf-connecting-ip')?.trim()
+    || request.headers.get('x-real-ip')?.trim()
   const secret = Deno.env.get('PASTEBOX_RATE_LIMIT_SECRET')
   if (!clientIp || !secret) return null
 
