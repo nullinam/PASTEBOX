@@ -1,360 +1,434 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 
-type PasteFile = {
-  id: string
-  name: string
-  purpose: string
+type SharedFile = {
   originalName: string
   size: number
+  uploaderName: string
+  purpose: string
   uploadedAt: string
   expiresAt: string
 }
 
-const API = import.meta.env.VITE_API_URL?.trim().replace(/\/$/, '') ?? ''
-const MAX_BYTES = 25 * 1024 * 1024
+type ApiResponse = {
+  error?: string
+  token?: string
+  file?: SharedFile
+  downloadUrl?: string
+}
 
-function prettySize(bytes: number) {
-  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+const API = import.meta.env.VITE_API_URL?.trim().replace(/\/$/, '') ?? ''
+const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? ''
+const MAX_FILE_BYTES = 50 * 1024 * 1024
+const HOUR_MS = 60 * 60 * 1000
+
+function parseShareToken() {
+  const hash = new URLSearchParams(window.location.hash.slice(1))
+  const token = hash.get('share') ?? ''
+  return token.length <= 128 ? token : token.slice(0, 128)
+}
+
+function prettySize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`
 }
 
 function remaining(expiresAt: string, now: number) {
   const milliseconds = Math.max(0, new Date(expiresAt).getTime() - now)
-  if (milliseconds === 0) return 'Expired'
-  const totalMinutes = Math.ceil(milliseconds / 60_000)
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  return hours ? hours + 'h ' + minutes + 'm left' : totalMinutes + 'm left'
+  if (!milliseconds) return 'Expired'
+  const hours = Math.floor(milliseconds / HOUR_MS)
+  const minutes = Math.floor((milliseconds % HOUR_MS) / 60_000)
+  const seconds = Math.floor((milliseconds % 60_000) / 1000)
+  return hours > 0
+    ? `${hours}h ${minutes.toString().padStart(2, '0')}m left`
+    : `${minutes}m ${seconds.toString().padStart(2, '0')}s left`
+}
+
+function formattedDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
+
+async function postJson(payload: Record<string, string>, signal?: AbortSignal): Promise<ApiResponse> {
+  const response = await fetch(API, {
+    method: 'POST',
+    headers: {
+      apikey: PUBLISHABLE_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    signal,
+  })
+  const result = await response.json().catch(() => ({})) as ApiResponse
+  if (!response.ok) throw new Error(result.error || 'Pastebox could not complete that request.')
+  return result
 }
 
 function App() {
-  const [tab, setTab] = useState<'upload' | 'view'>('upload')
-  const [files, setFiles] = useState<PasteFile[]>([])
+  const fileInput = useRef<HTMLInputElement>(null)
   const [selected, setSelected] = useState<File | null>(null)
-  const [dragging, setDragging] = useState(false)
-  const [name, setName] = useState('')
+  const [uploaderName, setUploaderName] = useState('')
   const [purpose, setPurpose] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [shareToken, setShareToken] = useState(parseShareToken)
+  const [sharedFile, setSharedFile] = useState<SharedFile | null>(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploading, setUploading] = useState(false)
+  const [uploadStage, setUploadStage] = useState('')
+  const [loadingShare, setLoadingShare] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const [now, setNow] = useState(Date.now())
-  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
 
-  const refresh = useCallback(async () => {
-    if (!API) {
-      setFiles([])
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    try {
-      const response = await fetch(API)
-      if (!response.ok) throw new Error('Could not load the shared files.')
-      const data = await response.json() as { files: PasteFile[] }
-      setFiles(Array.isArray(data.files) ? data.files : [])
-      setError('')
-    } catch {
-      setError('Pastebox could not reach its file service. Try again in a moment.')
-    } finally {
-      setLoading(false)
-    }
+  const storageReady = Boolean(API && PUBLISHABLE_KEY)
+  const shareUrl = shareToken
+    ? `${window.location.origin}${import.meta.env.BASE_URL}#share=${encodeURIComponent(shareToken)}`
+    : ''
+  const expired = Boolean(sharedFile && new Date(sharedFile.expiresAt).getTime() <= now)
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(interval)
   }, [])
 
-  useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [])
-  useEffect(() => {
-    if (tab !== 'view') return
-    const timer = window.setInterval(() => { void refresh() }, 60_000)
-    return () => window.clearInterval(timer)
-  }, [tab, refresh])
-
-  const activeFiles = useMemo(
-    () => files.filter(file => new Date(file.expiresAt).getTime() > now),
-    [files, now],
-  )
-
-  function selectTab(nextTab: 'upload' | 'view') {
-    setTab(nextTab)
+    if (!shareToken || sharedFile) return
+    const controller = new AbortController()
+    setLoadingShare(true)
     setError('')
-    setSuccess('')
-  }
+    postJson({ action: 'resolve', token: shareToken }, controller.signal)
+      .then(result => setSharedFile(result.file ?? null))
+      .catch(cause => {
+        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'This share link is invalid or has expired.')
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoadingShare(false) })
+    return () => controller.abort()
+  }, [shareToken, sharedFile])
 
-  function chooseFile(file: File | undefined) {
+  function chooseFile(file?: File) {
     setError('')
-    setSuccess('')
+    setCopied(false)
     if (!file) {
       setSelected(null)
-      const input = document.getElementById('file-input') as HTMLInputElement | null
-      if (input) input.value = ''
+      if (fileInput.current) fileInput.current.value = ''
       return
     }
-    if (file.size === 0) {
+    if (file.size < 1) {
       setSelected(null)
-      setError('Empty files can’t be uploaded.')
+      setError('Empty files can’t be shared. Choose a file with content.')
       return
     }
-    if (file.size > MAX_BYTES) {
+    if (file.size > MAX_FILE_BYTES) {
       setSelected(null)
-      setError('Files must be 25 MB or smaller.')
+      setError('This file is over the 50 MB limit. Choose a smaller file.')
       return
     }
     setSelected(file)
   }
 
-  async function upload(event: React.FormEvent<HTMLFormElement>) {
+  function onDrop(event: DragEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    setDragging(false)
+    chooseFile(event.dataTransfer.files.item(0) ?? undefined)
+  }
+
+  function leaveSharePage() {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+    setShareToken('')
+    setSharedFile(null)
+    setError('')
+    setCopied(false)
+  }
+
+  function uploadWithProgress(file: File, name: string, reason: string) {
+    return new Promise<ApiResponse>((resolve, reject) => {
+      const request = new XMLHttpRequest()
+      request.open('POST', API)
+      request.setRequestHeader('apikey', PUBLISHABLE_KEY)
+      request.upload.onprogress = event => {
+        if (!event.lengthComputable) return
+        const progress = Math.min(95, Math.round((event.loaded / event.total) * 95))
+        setUploadProgress(progress)
+        setUploadStage(progress >= 95 ? 'Finishing the secure handoff…' : 'Sending your file…')
+      }
+      request.onload = () => {
+        let result: ApiResponse = {}
+        try { result = JSON.parse(request.responseText) as ApiResponse } catch { /* handled below */ }
+        if (request.status >= 200 && request.status < 300) resolve(result)
+        else reject(new Error(result.error || 'Upload did not complete. You can retry in a moment.'))
+      }
+      request.onerror = () => reject(new Error('The connection dropped during upload. Check your network and retry.'))
+      request.onabort = () => reject(new Error('Upload was cancelled.'))
+      const body = new FormData()
+      body.append('file', file)
+      body.append('name', name)
+      body.append('purpose', reason)
+      setUploadStage('Preparing your private share link…')
+      request.send(body)
+    })
+  }
+
+  async function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
-    setSuccess('')
+    setCopied(false)
 
-    const cleanName = name.trim()
-    const cleanPurpose = purpose.trim()
-
-    if (!selected) return setError('Choose a file to upload.')
-    if (selected.size === 0) return setError('Empty files can’t be uploaded.')
-    if (selected.size > MAX_BYTES) return setError('Files must be 25 MB or smaller.')
-    if (cleanName.length < 2 || /^(anonymous|anon|test|name|n\/a|none)$/i.test(cleanName)) {
-      return setError('Enter your name (at least 2 characters).')
+    const cleanName = uploaderName.trim().replace(/\s+/g, ' ')
+    const cleanPurpose = purpose.trim().replace(/\s+/g, ' ')
+    if (!selected) return setError('Choose a file before uploading.')
+    if (selected.size < 1) return setError('Empty files can’t be shared.')
+    if (selected.size > MAX_FILE_BYTES) return setError('Files must be 50 MB or smaller.')
+    if (cleanName.length < 2 || /^(anonymous|anon|test|name|n\/a|na|none|unknown|guest|admin|user)(\s*\d*)?$|^x{2,}$|^\d{2,}$/i.test(cleanName)) {
+      return setError('Enter your name (at least 2 characters; placeholder names aren’t accepted).')
     }
-    if (cleanPurpose.length < 10) return setError('Please explain the purpose in at least 10 characters.')
-    if (!API) return setError('File storage is not connected yet.')
+    if (cleanPurpose.length < 10) return setError('Add a little context in the purpose field (at least 10 characters).')
+    if (cleanPurpose.length > 240) return setError('Keep the purpose under 240 characters.')
+    if (!storageReady) return setError('File storage is not configured yet. See the setup guide in the repository.')
 
-    setBusy(true)
+    setUploading(true)
+    setUploadProgress(0)
     try {
-      const body = new FormData()
-      body.append('file', selected)
-      body.append('name', cleanName)
-      body.append('purpose', cleanPurpose)
-      const response = await fetch(API, { method: 'POST', body })
-      const result = await response.json() as { error?: string }
-      if (!response.ok) throw new Error(result.error || 'Upload failed. Please try again.')
+      const result = await uploadWithProgress(selected, cleanName, cleanPurpose)
+      if (!result.token || !result.file) throw new Error('The upload finished, but Pastebox could not create the share link. Please contact the project owner.')
 
-      setSuccess('Your file is ready to share for the next 6 hours.')
+      setSharedFile(result.file)
+      setShareToken(result.token)
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#share=${encodeURIComponent(result.token)}`)
       setSelected(null)
-      setName('')
+      setUploaderName('')
       setPurpose('')
-      const input = document.getElementById('file-input') as HTMLInputElement | null
-      if (input) input.value = ''
-      await refresh()
-      setTab('view')
+      if (fileInput.current) fileInput.current.value = ''
+      setUploadProgress(100)
+      setUploadStage('Your link is ready')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Upload failed. Please try again.')
+      setError(cause instanceof Error ? cause.message : 'Upload failed. Keep your details and retry.')
     } finally {
-      setBusy(false)
+      setUploading(false)
     }
   }
+
+  async function copyLink() {
+    if (!shareUrl) return
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2200)
+    } catch {
+      setError('Copy was blocked by this browser. Select and copy the link manually from the address bar.')
+    }
+  }
+
+  async function downloadFile() {
+    if (!shareToken || downloading || expired) return
+    setDownloading(true)
+    setError('')
+    try {
+      const result = await postJson({ action: 'download', token: shareToken })
+      if (!result.downloadUrl) throw new Error('Pastebox could not prepare this download. Please retry.')
+      const target = new URL(result.downloadUrl)
+      const apiOrigin = new URL(API).origin
+      if (target.origin !== apiOrigin) throw new Error('Pastebox returned an unexpected download location.')
+      window.location.assign(target.href)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Download failed. Please retry.')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  const isSharePage = Boolean(shareToken)
 
   return (
     <main className="page-shell" id="top">
       <header className="topbar">
-        <a className="brand" href="#top" onClick={() => selectTab('upload')} aria-label="Pastebox home">
-          <img className="brand-mark" src={import.meta.env.BASE_URL + 'pastebox-icon.svg?v=3'} alt="" />
+        <a className="brand" href={import.meta.env.BASE_URL} onClick={event => { if (isSharePage) { event.preventDefault(); leaveSharePage() } }} aria-label="Pastebox home">
+          <img className="brand-mark" src={import.meta.env.BASE_URL + 'pastebox-icon.svg'} alt="" />
           <span>pastebox</span>
         </a>
-        <button className="top-view-button" type="button" onClick={() => { selectTab('view'); void refresh() }}>
-          Browse files <span aria-hidden="true">↗</span>
-        </button>
+        <span className="top-note"><span className="status-dot" /> LINK-ONLY FILE SHARING</span>
       </header>
 
       <section className="intro" aria-labelledby="page-title">
         <div className="intro-copy">
-          <p className="eyebrow"><span className="eyebrow-dot" /> PASTEBOX <span className="eyebrow-divider">/</span> GROUP FILES</p>
-          <h1 id="page-title">Drop files in.<br /><span>Pick them up anywhere.</span></h1>
+          <p className="eyebrow"><span className="eyebrow-line" /> SIMPLE FILE HANDOFF</p>
+          <h1 id="page-title">Files find<br /><span>their people.</span></h1>
+          <p className="intro-description">
+            {isSharePage
+              ? 'A shared file, ready when you are.'
+              : 'Send a file across devices with a link that lasts six hours.'}
+          </p>
         </div>
-        <aside className="expiry-card" aria-label="Files expire automatically after six hours">
-          <span className="expiry-icon" aria-hidden="true">◷</span>
-          <span className="expiry-label">AUTOMATIC CLEANUP</span>
-          <strong>6 hours</strong>
-          <span className="expiry-caption">Available to download until expiry.</span>
+        <aside className="expiry-card" aria-label="Share links expire after six hours">
+          <span className="expiry-kicker">LINK WINDOW</span>
+          <strong>06 <span>hours</span></strong>
+          <span className="expiry-line"><i /></span>
+          <span className="expiry-caption">Then access is removed automatically.</span>
         </aside>
       </section>
 
-      <section className="workspace" aria-label="Pastebox file sharing">
-        <div className="tabs" role="tablist" aria-label="Choose an action">
-          <button
-            className={tab === 'upload' ? 'tab active' : 'tab'}
-            id="upload-tab"
-            type="button"
-            role="tab"
-            aria-selected={tab === 'upload'}
-            aria-controls="upload-panel"
-            onClick={() => selectTab('upload')}
-          >
-            <span className="tab-icon" aria-hidden="true">↑</span> Upload
-          </button>
-          <button
-            className={tab === 'view' ? 'tab active' : 'tab'}
-            id="view-tab"
-            type="button"
-            role="tab"
-            aria-selected={tab === 'view'}
-            aria-controls="view-panel"
-            onClick={() => { selectTab('view'); void refresh() }}
-          >
-            <span className="tab-icon" aria-hidden="true">▤</span> View files
-            <span className="count-pill">{activeFiles.length}</span>
-          </button>
-        </div>
-
-        {tab === 'upload' ? (
-          <div className="panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab">
-            <div className="panel-heading">
-              <div>
-                <span className="step-label">01 <span>/</span> ADD A FILE</span>
-                <h2>Share something</h2>
-              </div>
-              <span className="file-limit">MAX 25 MB</span>
+      {!isSharePage ? (
+        <section className="workspace" aria-label="Upload a file">
+          <div className="workspace-heading">
+            <div>
+              <p className="step-label">01 <span>/</span> NEW SHARE</p>
+              <h2>Drop it here.</h2>
             </div>
-
-            <form onSubmit={upload}>
-              <div
-                className="dropzone-wrap"
-                onDragEnter={event => { event.preventDefault(); setDragging(true) }}
-                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }}
-                onDragLeave={event => {
-                  event.preventDefault()
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
-                }}
-                onDrop={event => {
-                  event.preventDefault()
-                  setDragging(false)
-                  chooseFile(event.dataTransfer.files.item(0) ?? undefined)
-                }}
-              >
-                <label className={dragging ? 'dropzone dragging' : 'dropzone'} htmlFor="file-input">
-                  <input
-                    id="file-input"
-                    type="file"
-                    onChange={event => chooseFile(event.target.files?.[0])}
-                  />
-                  <span className="upload-symbol" aria-hidden="true">{dragging ? '↓' : '↑'}</span>
-                  <span className="drop-title">{dragging ? 'Release to add your file' : selected ? 'Drop a file to replace this one' : 'Drop a file here or browse'}</span>
-                  <span className="drop-subtitle">Any format <span aria-hidden="true">·</span> Up to 25 MB</span>
-                </label>
-                {selected && (
-                  <div className="selected-file" role="status">
-                    <span className="selected-file-icon" aria-hidden="true">✓</span>
-                    <span className="selected-file-name" title={selected.name}>{selected.name}</span>
-                    <span className="selected-file-size">{prettySize(selected.size)}</span>
-                    <button className="remove-file-button" type="button" onClick={() => chooseFile(undefined)} aria-label="Remove selected file">Remove</button>
-                  </div>
-                )}
-              </div>
-
-              <div className="form-grid">
-                <label className="field">
-                  <span>Your name</span>
-                  <input
-                    value={name}
-                    onChange={event => setName(event.target.value)}
-                    placeholder="Enter your name"
-                    maxLength={60}
-                    autoComplete="name"
-                    required
-                  />
-                  <small>Shown with the file in the shared list.</small>
-                </label>
-                <label className="field">
-                  <span>Purpose</span>
-                  <textarea
-                    value={purpose}
-                    onChange={event => setPurpose(event.target.value)}
-                    placeholder="What is this file for?"
-                    maxLength={240}
-                    rows={3}
-                    required
-                  />
-                  <small>Give the group a little context (10–240 characters).</small>
-                </label>
-              </div>
-
-              {!API && (
-                <p className="service-note" role="status">
-                  <span aria-hidden="true">i</span>
-                  File storage is not connected yet. Uploads will be available after setup.
-                </p>
-              )}
-              {error && <p className="message error" role="alert">{error}</p>}
-              {success && <p className="message success" role="status">{success}</p>}
-
-              <div className="form-footer">
-                <span className="privacy-note"><span className="lock-icon" aria-hidden="true">▣</span> Stored privately · Shared on this page</span>
-                <button className="submit-button" type="submit" disabled={busy || !API}>
-                  {busy ? 'Uploading…' : API ? 'Upload file' : 'Storage not connected'} <span aria-hidden="true">↗</span>
-                </button>
-              </div>
-            </form>
+            <span className="file-limit">UP TO 50 MB</span>
           </div>
-        ) : (
-          <div className="panel" id="view-panel" role="tabpanel" aria-labelledby="view-tab">
-            <div className="panel-heading view-heading">
-              <div>
-                <span className="step-label">02 <span>/</span> SHARED FILES</span>
-                <h2>Files from your group</h2>
-              </div>
-              <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={loading || !API} aria-label="Refresh file list">
-                ↻
-              </button>
-            </div>
 
-            {error && <p className="message error" role="alert">{error}</p>}
-            {!API ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true">▤</span>
-                <strong>Storage isn’t connected yet</strong>
-                <span>Once setup is complete, shared files will appear here.</span>
-                <button type="button" onClick={() => selectTab('upload')}>Back to upload <span aria-hidden="true">↗</span></button>
-              </div>
-            ) : activeFiles.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true">▤</span>
-                <strong>{loading ? 'Checking for files…' : 'Nothing here yet'}</strong>
-                <span>{loading ? 'Your group’s latest uploads will show here.' : 'Upload the first file for your group.'}</span>
-                <button type="button" onClick={() => selectTab('upload')}>Upload a file <span aria-hidden="true">↗</span></button>
-              </div>
-            ) : (
-              <div className="file-list">
-                {activeFiles.map(file => (
-                  <article className="file-card" key={file.id}>
-                    <div className="file-type" aria-hidden="true">
-                      {file.originalName.split('.').pop()?.slice(0, 5).toUpperCase() || 'FILE'}
-                    </div>
-                    <div className="file-info">
-                      <h3 title={file.originalName}>{file.originalName}</h3>
-                      <p>{file.purpose}</p>
-                      <div className="file-meta">
-                        <span>Uploaded by <strong>{file.name}</strong></span>
-                        <time dateTime={file.uploadedAt}>{new Date(file.uploadedAt).toLocaleString()}</time>
-                      </div>
-                    </div>
-                    <div className="file-actions">
-                      <span className="expiry">{remaining(file.expiresAt, now)}</span>
-                      <a className="download-button" href={API + '?download=' + encodeURIComponent(file.id)}>
-                        Download <span aria-hidden="true">↓</span>
-                      </a>
-                      <span className="file-size">{prettySize(file.size)}</span>
-                    </div>
-                  </article>
-                ))}
+          <form onSubmit={submitUpload}>
+            <input
+              ref={fileInput}
+              className="visually-hidden"
+              type="file"
+              onChange={event => chooseFile(event.target.files?.[0])}
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+            <button
+              className={`dropzone${dragging ? ' is-dragging' : ''}${selected ? ' has-file' : ''}`}
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              onDragEnter={event => { event.preventDefault(); setDragging(true) }}
+              onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }}
+              onDragLeave={event => {
+                event.preventDefault()
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+              }}
+              onDrop={onDrop}
+              aria-label={selected ? `Selected file ${selected.name}. Choose another file or drop to replace.` : 'Choose a file or drop a file here'}
+              disabled={uploading}
+            >
+              <span className="drop-icon" aria-hidden="true">{selected ? '✓' : dragging ? '↓' : '↑'}</span>
+              <span className="drop-title">{selected ? selected.name : dragging ? 'Release to add your file' : 'Drop a file here'}</span>
+              <span className="drop-subtitle">{selected ? `${prettySize(selected.size)} · Any format` : 'Any format · Up to 50 MB'}</span>
+              <span className="browse-button">{selected ? 'Choose another' : 'Browse files'} <span aria-hidden="true">↗</span></span>
+            </button>
+
+            {selected && (
+              <div className="selected-file" role="status">
+                <span className="selected-file-mark" aria-hidden="true">FILE</span>
+                <span className="selected-file-details"><strong>{selected.name}</strong><small>{prettySize(selected.size)} · Ready to upload</small></span>
+                <button type="button" className="text-button" onClick={() => chooseFile()} disabled={uploading}>Remove</button>
               </div>
             )}
 
-            <div className="list-footnote">
-              <span className="live-dot" aria-hidden="true" />
-              <span>Refreshes every minute</span><span className="footnote-divider">·</span><span>Files expire 6 hours after upload</span>
+            <div className="form-grid">
+              <label className="field">
+                <span>Your name</span>
+                <input
+                  value={uploaderName}
+                  onChange={event => setUploaderName(event.target.value)}
+                  placeholder="How should we credit you?"
+                  autoComplete="name"
+                  maxLength={80}
+                  required
+                  disabled={uploading}
+                />
+                <small>Shown with the file. Names aren’t verified.</small>
+              </label>
+              <label className="field">
+                <span>Why are you sharing it?</span>
+                <textarea
+                  value={purpose}
+                  onChange={event => setPurpose(event.target.value)}
+                  placeholder="Give the recipient a little context…"
+                  maxLength={240}
+                  rows={3}
+                  required
+                  disabled={uploading}
+                />
+                <small>At least 10 characters.</small>
+              </label>
             </div>
-          </div>
-        )}
-      </section>
+
+            {!storageReady && <p className="service-note" role="status">Storage setup is not finished. The upload will be available when the public function URL and publishable key are configured.</p>}
+            {error && <p className="message error" role="alert">{error}</p>}
+
+            {uploading && (
+              <div className="progress-block" role="status" aria-live="polite">
+                <div className="progress-copy"><span>{uploadStage}</span><strong>{uploadProgress}%</strong></div>
+                <div className="progress-track" role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadProgress}>
+                  <span style={{ width: `${uploadProgress}%` }} />
+                </div>
+              </div>
+            )}
+
+            <div className="form-footer">
+              <p className="link-warning"><span aria-hidden="true">↗</span> Anyone with the link can download it until it expires.</p>
+              <button className="submit-button" type="submit" disabled={uploading || !storageReady}>
+                {uploading ? 'Uploading…' : 'Create share link'} <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <section className="workspace share-workspace" aria-label="Shared file">
+          {loadingShare && !sharedFile ? (
+            <div className="share-loading" role="status"><span className="loading-orbit" /> Checking this share link…</div>
+          ) : sharedFile && !expired ? (
+            <div className="share-content" key="share-ready">
+              <div className="share-heading">
+                <p className="step-label">02 <span>/</span> LINK-ONLY SHARE</p>
+                <h2>Your file is ready.</h2>
+                <p>Anyone with this link can download the file while it’s active. Keep the link within your circle.</p>
+              </div>
+
+              <div className="share-link-box">
+                <div className="share-link-copy">
+                  <span className="share-link-label">YOUR SHARE LINK</span>
+                  <span className="share-link-value">{shareUrl}</span>
+                </div>
+                <button className={`copy-button${copied ? ' is-copied' : ''}`} type="button" onClick={copyLink}>
+                  <span aria-hidden="true">{copied ? '✓' : '▢'}</span>{copied ? 'Copied' : 'Copy link'}
+                </button>
+              </div>
+
+              <article className="shared-file-card">
+                <div className="shared-file-top">
+                  <span className="file-glyph" aria-hidden="true">FILE</span>
+                  <div className="shared-file-name"><span>SHARED FILE</span><h3 title={sharedFile.originalName}>{sharedFile.originalName}</h3></div>
+                  <span className="size-pill">{prettySize(sharedFile.size)}</span>
+                </div>
+                <div className="shared-file-purpose"><span>PURPOSE</span><p>{sharedFile.purpose}</p></div>
+                <div className="details-grid">
+                  <div><span>UPLOADED BY</span><strong>{sharedFile.uploaderName}</strong></div>
+                  <div><span>UPLOADED</span><strong>{formattedDate(sharedFile.uploadedAt)}</strong></div>
+                  <div className="countdown-detail"><span>LINK EXPIRES IN</span><strong><i className="status-dot" />{remaining(sharedFile.expiresAt, now)}</strong></div>
+                </div>
+              </article>
+
+              {error && <p className="message error" role="alert">{error}</p>}
+              <div className="share-actions">
+                <button className="download-button" type="button" onClick={downloadFile} disabled={downloading || expired}>
+                  {downloading ? 'Preparing download…' : 'Download file'} <span aria-hidden="true">↓</span>
+                </button>
+                <button className="text-button upload-another" type="button" onClick={leaveSharePage}>Upload another file <span aria-hidden="true">↗</span></button>
+              </div>
+              <p className="download-note">Downloads are delivered as files. Pastebox doesn’t preview or scan uploads.</p>
+            </div>
+          ) : (
+            <div className="expired-state" key="share-expired">
+              <span className="expired-icon" aria-hidden="true">↗</span>
+              <p className="step-label">SHARE LINK UNAVAILABLE</p>
+              <h2>{error ? 'This link can’t be opened.' : 'This share has expired.'}</h2>
+              <p>{error || 'Files are available for six hours after upload. Ask the sender to create a new link.'}</p>
+              <button className="submit-button" type="button" onClick={leaveSharePage}>Back to Pastebox <span aria-hidden="true">↗</span></button>
+            </div>
+          )}
+        </section>
+      )}
 
       <footer className="footer">
-        <span>Maximum file size: 25 MB</span>
-        <span>Files are removed 6 hours after upload</span>
+        <span>50 MB max · Any file format</span>
+        <span>Share links expire after 6 hours</span>
       </footer>
     </main>
   )
 }
 
 export default App
+
