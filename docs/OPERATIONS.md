@@ -1,35 +1,42 @@
 # Operations and maintenance
 
-## Expiry and physical cleanup
+## Expiration and cleanup
 
-The `public.files` table sets `expires_at` to six hours after row creation. The Edge Function and frontend should use that timestamp to hide expired files and deny downloads.
+The public API checks expiry on each share resolution and download. When `expires_at` is reached, it rejects access immediately.
 
-**No scheduled physical cleanup is currently configured or verified.** An expired item may therefore remain as a row in Postgres and an object in the private `pastebox-files` bucket after the app stops exposing it. This can continue to use Storage. Implement and test a scheduled purge that deletes expired objects and then their metadata rows before describing the six-hour lifecycle as automatic deletion.
+Supabase Cron runs `pastebox-cleanup` every five minutes. The secret-only function processes up to 100 expired shares and 100 abandoned pending uploads per run. For each record it removes the private Storage object first, then deletes metadata. A failed object removal leaves the row for retry. Cleanup also removes old HMAC rate-limit windows. Physical deletion may lag expiry by one schedule interval or longer if Supabase reports a Storage failure; review Cron run results and function logs.
 
-The UI updates countdowns periodically and refreshes the list while the View tab is open. A stale list display does not make an expired download valid if server-side expiry checks are working.
+The six-hour lifetime begins after Storage confirms upload completion. Pending uploads are not shareable and are cleaned after the 30-minute pending window.
+
+## Monitoring
+
+- Check Supabase Edge Function invocation/runtime logs for status and error trends. Do not log request bodies, share tokens, file contents, or raw IP addresses.
+- Review Supabase Cron job run details for cleanup failures and duration.
+- Monitor Storage usage and project limits. Public uploads can increase resource use even with a per-IP rate limit.
+- Check the private bucket and its 50 MiB object cap if users receive storage errors.
 
 ## Incident response
 
-- **A file should no longer be available:** until an app-level delete flow exists, the project owner can remove the object from Supabase Storage and its corresponding row from `public.files`. Verify both were removed. This does not erase copies recipients already downloaded.
-- **A credential is exposed:** revoke or rotate it in Supabase first. Then review repository history, Actions logs, function settings, and local files. Deleting a GitHub file alone does not revoke a credential.
-- **Abuse or unexpectedly high usage:** uploads and reads are public, with no rate limit or per-person quota. Review Supabase function logs and Storage/database usage; disable or restrict the public function while investigating if necessary.
-- **Backend requests fail:** the Pages interface may still load while upload/list/download fail. Check whether the function URL is reachable, then inspect Edge Function logs, CORS, function invocation configuration, private bucket access, and table schema.
-- **Managed network closes the connection:** if the request shows `ERR_CONNECTION_CLOSED` without an HTTP status, test from another network. If it works there, request outbound HTTPS access to the project host from the network administrator.
+- **A share link leaks:** anyone with it can download before expiry. For immediate revocation, use an authorized owner process to remove the matching Storage object and metadata row. The current UI has no manual delete control.
+- **A secret key leaks:** rotate it in Supabase immediately, update the Vault cron secret if that key was used there, then assess Git history, Actions logs, and local files. Deleting a file does not invalidate a key.
+- **Unexpected upload activity:** review function invocation and Storage usage, consider tightening upload limits or disabling the public upload function while investigating.
+- **Download or upload failures:** check Edge Function logs, RLS/grants, bucket privacy/size limit, and GitHub Pages variables. A managed network may block `YOUR_PROJECT_REF.supabase.co`; test from a second network before changing application code.
+- **Cleanup backlog:** inspect Cron history and function errors. Retry the job after correcting access; expired links remain denied while physical cleanup is pending.
 
 ## Data handling
 
-- File objects should remain in a private Supabase Storage bucket and be served through the Edge Function.
-- The database stores public-facing metadata and an internal Storage path.
-- Metadata is visible to anyone who can access the public app/API.
-- Downloaded copies and files saved outside Pastebox are not controlled by Pastebox.
-- Supabase is a third-party processor for the function, database, and object storage. Review applicable plan, retention, and service terms before uploading anything sensitive.
+- Postgres stores uploader name, purpose, original filename, size, timestamps, token hash, and internal Storage path.
+- The rate-limit table stores a keyed HMAC of client IP, not raw IP.
+- File bytes are private until a validated share token produces a short-lived signed download URL.
+- User-submitted metadata is visible to anyone with the corresponding share link. Do not place sensitive data in the name/purpose fields.
+- Supabase is a third-party data processor for API, database, and Storage operations. Review plan, region, retention, and terms before use.
+- Pastebox cannot erase recipient downloads, screenshots, browser history, or copies outside its control.
 
-## Current operational gaps
+## Known limitations
 
-- Scheduled physical deletion of expired records and objects is not configured/verified.
-- No rate limiting, quotas, abuse reporting, monitoring alert, or admin console.
-- No scanner, moderation queue, user authentication, or manual-delete UI.
-- The deployed function source is not versioned in this repository.
-- No automated backend integration test or recovery/backup policy is documented.
+- No accounts, CAPTCHA, malware scanning, moderation, public listing, manual delete UI, or recovery/backup workflow.
+- Link holders can redistribute their share links.
+- A per-IP limit can be shared by people behind the same NAT and can be bypassed by distributed clients.
+- Edge Function standard uploads above 6 MiB should be load-tested; resumable upload would improve reliability if larger uploads fail on the target plan/network.
+- Cron storage/provider errors can delay physical deletion; expiry checks continue to deny app access.
 
-These are first-version limitations. Public sharing is suitable only for files the group is comfortable making downloadable to anyone who can reach the service.
