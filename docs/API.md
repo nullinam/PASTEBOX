@@ -1,20 +1,18 @@
 # API reference
 
-The API base URL is the Cloudflare Worker URL, for example `https://pastebox-api.<account-subdomain>.workers.dev`. The URL is public configuration. All endpoints return JSON errors in the form `{ "error": "..." }`, except successful downloads.
+The frontend API URL is the public Supabase Edge Function endpoint:
 
-## `GET /api/health`
-
-Returns a minimal health response when the Worker is reachable.
-
-```json
-{ "ok": true }
+```text
+https://YOUR_PROJECT_REF.supabase.co/functions/v1/pastebox-upload
 ```
 
-This checks Worker reachability only. It does not prove that D1 and R2 are provisioned correctly.
+Set it as the GitHub Actions repository variable `VITE_API_URL`. It is a public URL, not a secret. Never put a service-role key in the frontend. The function is publicly callable and must validate every request server-side.
 
-## `GET /api/files`
+The endpoint contract below reflects the current frontend integration and deployed setup.
 
-Returns up to 200 active files, newest first. Expired records are excluded by the database query.
+## `GET /` — list active files
+
+Returns active file metadata newest first:
 
 ```json
 {
@@ -32,38 +30,32 @@ Returns up to 200 active files, newest first. Expired records are excluded by th
 }
 ```
 
-The list is public. It contains uploader-entered metadata and is not paginated in this version. A background cleanup is requested while listing.
+The list is public. It must not return the private Storage path, privileged credentials, or expired records.
 
-## `POST /api/files`
+## `POST /` — upload
 
-Creates a file record. Send `multipart/form-data` fields:
+Send `multipart/form-data` with:
 
 | Field | Type | Requirements |
 |---|---|---|
-| `file` | File | Required, non-empty, at most 25 MiB; any extension/content type accepted |
-| `name` | Text | Required, trimmed, 2–60 characters; common placeholder values are rejected |
+| `file` | File | Required, non-empty, at most 25 MiB; any format accepted |
+| `name` | Text | Required, trimmed, 2–80 characters in the database; common placeholders are rejected by the current UI |
 | `purpose` | Text | Required, trimmed, 10–240 characters |
 
-On success, returns HTTP `201`:
+The server records the upload time and expiry. A successful response should provide the created file ID and upload/expiry timestamps. The function should store the bytes in the private `pastebox-files` bucket and then store metadata in `public.files`; if metadata creation fails, it should attempt to remove the uploaded object.
 
-```json
-{
-  "id": "uuid",
-  "uploadedAt": "2026-10-20T10:00:00.000Z",
-  "expiresAt": "2026-10-20T16:00:00.000Z"
-}
-```
+The exact success and error response shape should be kept in sync with `src/App.tsx` and the deployed function source.
 
-The Worker first writes bytes to R2, then inserts the D1 row. If the insert fails, it attempts to remove the R2 object. Names remain unverified, and the purpose check only enforces length.
+## `GET /?download=<id>` — download
 
-Possible errors include `400` for missing/invalid fields, `413` for oversized uploads, and `503` when storage cannot save the upload.
+The function looks up the file by ID, checks that `expires_at` is later than the server's current time, retrieves the object from private Storage, and returns it as an attachment. It should return a not-found response for expired or missing records. Do not expose permanent public object URLs.
 
-## `GET /api/files/{id}/download`
+## Expiry
 
-Streams the file as an attachment only if its D1 record exists and `expires_at` is later than the current server time. It returns `404` for an expired/missing file. Response headers include `Content-Disposition: attachment`, `Content-Type: application/octet-stream`, `X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`.
+The database default sets expiry to six hours after row creation. Listing and download behavior must enforce this deadline. Physical deletion is not yet configured; expired rows/objects can remain stored after access is blocked. See [operations](OPERATIONS.md).
 
-There is no public R2 object URL, no file preview endpoint, and no manual delete endpoint.
+## CORS and errors
 
-## CORS
+The Edge Function must handle browser preflight requests and allow the deployed site origin `https://nullinam.github.io`; add local development origins only when needed. CORS is not authorization. Requests from scripts and command-line clients can still reach a public endpoint.
 
-The Worker allows the `ALLOWED_ORIGIN` configured in Wrangler and permits `http://localhost:<port>` for development. CORS is a browser policy, not authorization: scripts and command-line clients can call the API directly.
+The frontend displays a connection error if the function cannot be reached. A network-level error such as `ERR_CONNECTION_CLOSED` with no HTTP status usually means the request did not reach the function; inspect the network/proxy, then check Edge Function logs for requests that do arrive.
