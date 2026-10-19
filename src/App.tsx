@@ -95,7 +95,7 @@ function App() {
 
   return <main className="page-shell">
     <header className="topbar">
-      <a className="brand" href="#top" onClick={() => setTab('upload')} aria-label="Pastebox home"><span className="brand-mark">p</span><span>pastebox</span></a>
+      <a className="brand" href="#top" onClick={() => setTab('upload')} aria-label="Pastebox home"><img className="brand-mark" src={`${import.meta.env.BASE_URL}pastebox-icon.svg`} alt="" /><span>pastebox</span></a>
       <div className="top-note"><span className="live-dot" /> Just for your circle</div>
     </header>
 
