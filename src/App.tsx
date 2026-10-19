@@ -31,6 +31,7 @@ function App() {
   const [tab, setTab] = useState<'upload' | 'view'>('upload')
   const [files, setFiles] = useState<PasteFile[]>([])
   const [selected, setSelected] = useState<File | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [name, setName] = useState('')
   const [purpose, setPurpose] = useState('')
   const [busy, setBusy] = useState(false)
@@ -79,6 +80,28 @@ function App() {
     setTab(nextTab)
     setError('')
     setSuccess('')
+  }
+
+  function chooseFile(file: File | undefined) {
+    setError('')
+    setSuccess('')
+    if (!file) {
+      setSelected(null)
+      const input = document.getElementById('file-input') as HTMLInputElement | null
+      if (input) input.value = ''
+      return
+    }
+    if (file.size === 0) {
+      setSelected(null)
+      setError('Empty files can’t be uploaded.')
+      return
+    }
+    if (file.size > MAX_BYTES) {
+      setSelected(null)
+      setError('Files must be 25 MB or smaller.')
+      return
+    }
+    setSelected(file)
   }
 
   async function upload(event: React.FormEvent<HTMLFormElement>) {
@@ -186,21 +209,39 @@ function App() {
             </div>
 
             <form onSubmit={upload}>
-              <label className="dropzone" htmlFor="file-input">
-                <input
-                  id="file-input"
-                  type="file"
-                  onChange={event => {
-                    setSelected(event.target.files?.[0] ?? null)
-                    setError('')
-                    setSuccess('')
-                  }}
-                />
-                <span className="upload-symbol" aria-hidden="true">↑</span>
-                <span className="drop-title">{selected ? selected.name : 'Choose a file to upload'}</span>
-                <span className="drop-subtitle">Any format <span aria-hidden="true">·</span> Up to 25 MB</span>
-                {selected && <span className="selected-size">{prettySize(selected.size)}</span>}
-              </label>
+              <div
+                className="dropzone-wrap"
+                onDragEnter={event => { event.preventDefault(); setDragging(true) }}
+                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }}
+                onDragLeave={event => {
+                  event.preventDefault()
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+                }}
+                onDrop={event => {
+                  event.preventDefault()
+                  setDragging(false)
+                  chooseFile(event.dataTransfer.files.item(0) ?? undefined)
+                }}
+              >
+                <label className={dragging ? 'dropzone dragging' : 'dropzone'} htmlFor="file-input">
+                  <input
+                    id="file-input"
+                    type="file"
+                    onChange={event => chooseFile(event.target.files?.[0])}
+                  />
+                  <span className="upload-symbol" aria-hidden="true">{dragging ? '↓' : '↑'}</span>
+                  <span className="drop-title">{dragging ? 'Release to add your file' : selected ? 'Drop a file to replace this one' : 'Drop a file here or browse'}</span>
+                  <span className="drop-subtitle">Any format <span aria-hidden="true">·</span> Up to 25 MB</span>
+                </label>
+                {selected && (
+                  <div className="selected-file" role="status">
+                    <span className="selected-file-icon" aria-hidden="true">✓</span>
+                    <span className="selected-file-name" title={selected.name}>{selected.name}</span>
+                    <span className="selected-file-size">{prettySize(selected.size)}</span>
+                    <button className="remove-file-button" type="button" onClick={() => chooseFile(undefined)} aria-label="Remove selected file">Remove</button>
+                  </div>
+                )}
+              </div>
 
               <div className="form-grid">
                 <label className="field">
