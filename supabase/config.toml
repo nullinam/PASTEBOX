@@ -1,0 +1,6 @@
+[functions.pastebox-upload]
+verify_jwt = false
+
+[functions.pastebox-cleanup]
+verify_jwt = false
+
