@@ -48,7 +48,7 @@ function App() {
     }
     setLoading(true)
     try {
-      const response = await fetch(API + '/api/files')
+      const response = await fetch(API)
       if (!response.ok) throw new Error('Could not load the shared files.')
       const data = await response.json() as { files: PasteFile[] }
       setFiles(Array.isArray(data.files) ? data.files : [])
@@ -127,7 +127,7 @@ function App() {
       body.append('file', selected)
       body.append('name', cleanName)
       body.append('purpose', cleanPurpose)
-      const response = await fetch(API + '/api/files', { method: 'POST', body })
+      const response = await fetch(API, { method: 'POST', body })
       const result = await response.json() as { error?: string }
       if (!response.ok) throw new Error(result.error || 'Upload failed. Please try again.')
 
@@ -331,7 +331,7 @@ function App() {
                     </div>
                     <div className="file-actions">
                       <span className="expiry">{remaining(file.expiresAt, now)}</span>
-                      <a className="download-button" href={API + '/api/files/' + encodeURIComponent(file.id) + '/download'}>
+                      <a className="download-button" href={API + '?download=' + encodeURIComponent(file.id)}>
                         Download <span aria-hidden="true">↓</span>
                       </a>
                       <span className="file-size">{prettySize(file.size)}</span>
