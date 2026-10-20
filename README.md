@@ -7,24 +7,25 @@ Pastebox lets someone upload a file and share it with a short-lived link. A reci
 
 ## How it works
 
-1. The uploader selects a file up to 50 MB and enters a name and a purpose.
-2. The browser sends the file and metadata to the public Pastebox Edge Function. The function validates the actual received file size and text, rate-limits uploads, and stores file bytes in a private Supabase Storage bucket.
+1. The uploader selects one or more files, up to 50 MB each. Pastebox does not collect uploader names or sharing purposes.
+2. The browser sends each file in its own request with a SHA-256 checksum. The function verifies the bytes, applies per-IP/hourly and total-storage quotas, and stores file bytes in a private Supabase Storage bucket.
 3. After storage succeeds, the function creates a 256-bit random share token using the Web Crypto API. The database stores only its SHA-256 hash.
-4. Pastebox returns a share URL containing the bearer token in the URL fragment. URL fragments are not sent in the initial page request or HTTP Referer header.
+4. Pastebox returns a share URL containing the bearer token in the URL fragment and a separate one-time revoke key. Keep the revoke key private; anyone with it can revoke the file. URL fragments are not sent in the initial page request or HTTP Referer header.
 5. A share page sends the token to the backend for resolution. The backend checks the hash and expiry. No public listing or direct database access is available.
-6. On download, the backend rechecks the token and expiry, then creates a short-lived signed Storage URL with attachment disposition.
+6. On download, the backend rechecks the token and expiry, increments a private download count, then creates a short-lived signed Storage URL with attachment disposition. The browser verifies the downloaded file checksum before saving it.
 7. Six hours after upload, link resolution and download are denied immediately. A Supabase Cron job invokes a secret-only cleanup function every five minutes to remove expired Storage objects and metadata. Physical deletion can therefore occur up to about five minutes after access expires.
 
 Pastebox does not scan, preview, execute, or render uploaded files. Recipients download opaque data as an attachment. Anyone who has a share link can download that file before expiry, so share links should be treated like passwords. Pastebox cannot remove copies already downloaded.
 
 ## Product limits
 
-- Any file format, up to 50 MB; empty and oversized files are rejected.
-- Uploader name required, 2–80 characters, trimmed; common placeholders are rejected. Names are not identity-verified.
-- Purpose required, 10–240 characters; its truth is not verified.
-- No file listing, accounts, access codes, manual-delete UI, or permanent links.
-- Upload rate limit: at most 10 attempts per client IP per one-hour window. The IP is HMAC-hashed server-side before storage; raw IP addresses are not stored in the rate-limit table.
+- Any file format, up to 50 MB per file; empty and oversized files are rejected. Multi-file selections upload sequentially.
+- No uploader name or purpose is collected or displayed.
+- No file listing, accounts, access codes, or permanent links. Each uploader receives a separate revoke key that acts as a private delete capability.
+- Default upload limits are 10 attempts and 200 MiB per client IP per hour, with a 1 GiB global storage cap. The owner can adjust them in Edge Function secrets. IPs are HMAC-hashed server-side; raw IP addresses are not stored.
 - Access is intentionally link-based, not restricted to a friend group. Anyone with the link can access the file for its active period.
+- Optional first-download deletion, private owner usage view, file checksum verification, clipboard paste, PWA installation, and Web Share Target receiving are supported.
+- Resumable uploads and QR-code generation are not included in this release. See [known limitations](docs/OPERATIONS.md#known-limitations).
 
 ## Technology
 
@@ -81,4 +82,3 @@ docs/                             Architecture, API, security, deployment, opera
 ## License
 
 No license is currently declared. Until one is added, do not assume this project is available for reuse or redistribution.
-

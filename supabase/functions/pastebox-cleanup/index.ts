@@ -11,8 +11,7 @@ const handler = withSupabase({ auth: 'secret' }, async (request, context) => {
   const [expiredResult, pendingResult] = await Promise.all([
     context.supabaseAdmin.from('pastebox_shares')
       .select('id, storage_path')
-      .eq('status', 'active')
-      .lte('expires_at', now)
+      .or(`status.eq.revoked,and(status.eq.downloaded,expires_at.lte.${now}),and(status.eq.active,expires_at.lte.${now})`)
       .limit(BATCH_SIZE),
     context.supabaseAdmin.from('pastebox_shares')
       .select('id, storage_path')
@@ -46,8 +45,11 @@ const handler = withSupabase({ auth: 'secret' }, async (request, context) => {
     .delete()
     .lt('window_started_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
 
+  await context.supabaseAdmin.from('pastebox_upload_reservations')
+    .delete()
+    .lt('created_at', new Date(Date.now() - 30 * 60 * 1000).toISOString())
+
   return Response.json({ ok: true, removed })
 })
 
 export default { fetch: handler }
-

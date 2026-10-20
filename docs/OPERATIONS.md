@@ -17,7 +17,7 @@ The six-hour lifetime begins after Storage confirms upload completion. Pending u
 
 ## Incident response
 
-- **A share link leaks:** anyone with it can download before expiry. For immediate revocation, use an authorized owner process to remove the matching Storage object and metadata row. The current UI has no manual delete control.
+- **A share link leaks:** anyone with it can download before expiry. Use the separate private revoke key from the uploader screen to block future access. A previously issued signed download URL can remain valid for up to 60 seconds; cleanup removes the object on its next run.
 - **A secret key leaks:** rotate it in Supabase immediately, update the Vault cron secret if that key was used there, then assess Git history, Actions logs, and local files. Deleting a file does not invalidate a key.
 - **Unexpected upload activity:** review function invocation and Storage usage, consider tightening upload limits or disabling the public upload function while investigating.
 - **Download or upload failures:** check Edge Function logs, RLS/grants, bucket privacy/size limit, and GitHub Pages variables. A managed network may block `YOUR_PROJECT_REF.supabase.co`; test from a second network before changing application code.
@@ -25,18 +25,20 @@ The six-hour lifetime begins after Storage confirms upload completion. Pending u
 
 ## Data handling
 
-- Postgres stores uploader name, purpose, original filename, size, timestamps, token hash, and internal Storage path.
+- Postgres stores original filename, size, timestamps, token/revoke-token hashes, checksum, download count, deletion setting, and internal Storage path. Legacy uploader-name and purpose columns may contain values from uploads created before those fields were removed; new uploads omit them.
 - The rate-limit table stores a keyed HMAC of client IP, not raw IP.
 - File bytes are private until a validated share token produces a short-lived signed download URL.
-- User-submitted metadata is visible to anyone with the corresponding share link. Do not place sensitive data in the name/purpose fields.
+- Share pages display the file name, type, size, upload time, exact expiry, and countdown. They do not collect or display uploader names or purposes.
 - Supabase is a third-party data processor for API, database, and Storage operations. Review plan, region, retention, and terms before use.
 - Pastebox cannot erase recipient downloads, screenshots, browser history, or copies outside its control.
 
 ## Known limitations
 
-- No accounts, CAPTCHA, malware scanning, moderation, public listing, manual delete UI, or recovery/backup workflow.
+- No accounts, CAPTCHA, malware scanning, moderation, public listing, or recovery/backup workflow.
 - Link holders can redistribute their share links.
 - A per-IP limit can be shared by people behind the same NAT and can be bypassed by distributed clients.
-- Edge Function standard uploads above 6 MiB should be load-tested; resumable upload would improve reliability if larger uploads fail on the target plan/network.
+- QR-code generation is not included yet. Do not use a third-party QR image service for share links because that would disclose the bearer token to that service.
+- Resumable transfers are not included yet. The current API intentionally validates and stores a complete file on the trusted server path; see the deployment guide for a safe resumable design.
+- Download checksum verification buffers the completed file in the browser; the product cap is 50 MiB. Keep the cap in place unless the client adopts an incremental hashing implementation.
+- Owner egress figures are estimates based on file size and download count, not exact provider billing usage.
 - Cron storage/provider errors can delay physical deletion; expiry checks continue to deny app access.
-

@@ -17,28 +17,33 @@ Send `multipart/form-data` fields:
 | Field | Type | Requirements |
 |---|---|---|
 | `file` | File | Exactly one, non-empty, maximum 52,428,800 bytes (50 MiB) |
-| `name` | Text | Trimmed, 2–80 characters; blank, whitespace-only, common placeholders, repeated Xs, and all-numeric labels are rejected |
-| `purpose` | Text | Trimmed, 10–240 characters |
+| `checksum` | Text | Required lowercase SHA-256 hex digest of the selected file bytes |
+| `delete_after_first_download` | Text | Required `true` or `false` |
 
-The server enforces the size, field rules, storage bucket limit, and ten-attempts-per-forwarded-IP-per-hour rate limit. A failed request does not return a usable share token.
+The server accepts only these fields and enforces the size, checksum, private bucket limit, configured per-IP/hourly quotas, and total storage cap. Multi-file selections are sent as separate sequential requests. Failed requests do not return a usable share token.
 
 Successful response (`201`):
 
 ```json
 {
   "token": "URL-safe 256-bit random bearer token",
+  "revokeToken": "separate URL-safe 256-bit private deletion capability",
   "file": {
     "originalName": "notes.pdf",
     "size": 12400,
-    "uploaderName": "Sam",
-    "purpose": "Sharing the notes from our study session.",
     "uploadedAt": "2026-10-20T10:00:00.000Z",
-    "expiresAt": "2026-10-20T16:00:00.000Z"
+    "expiresAt": "2026-10-20T16:00:00.000Z",
+    "checksum": "lowercase SHA-256 hex digest",
+    "deleteAfterFirstDownload": false
   }
 }
 ```
 
 The raw token is returned once for constructing the share URL. Only its SHA-256 hash is written to the database. The API response is `no-store` and the frontend places the token after `#share=`.
+
+The revoke token is returned once and stored as a SHA-256 hash. It is a separate bearer capability and must not be shared with recipients. `POST` JSON `{ "action": "revoke", "revokeToken": "..." }` revokes the matching share; physical object removal is retried by cleanup. `POST` JSON `{ "action": "owner-stats", "revokeToken": "..." }` returns the uploader-only download count.
+
+`POST` JSON `{ "action": "owner-usage" }` returns aggregate usage only when accompanied by `x-owner-key` matching the server-side `PASTEBOX_OWNER_ACCESS_KEY`. Never set that value in a `VITE_` variable or expose it in the page.
 
 ## `POST` JSON — resolve a share link
 
@@ -54,7 +59,7 @@ Successful response: `{ "file": { ...metadata shown above... } }`. The server ha
 { "action": "download", "token": "..." }
 ``
 
-After the same hash and expiry checks, the function returns `{ "downloadUrl": "..." }`. The signed URL lasts no more than 60 seconds and no later than the share expiry. The object is served as an attachment with an octet-stream content type and no-store/no-sniff protections. The browser verifies that the URL host matches the configured Supabase project before navigating to it.
+After the same hash and expiry checks, the function atomically records a download and returns `{ "downloadUrl": "..." }`. The signed URL lasts no more than 60 seconds. Files marked for first-download deletion become inaccessible immediately and are queued for cleanup after a short grace period for the signed transfer. Objects are served as attachments with an octet-stream content type. The browser checks the URL host and verifies the SHA-256 checksum before saving the downloaded bytes.
 
 ## Secret-only cleanup function
 
@@ -65,4 +70,3 @@ After the same hash and expiry checks, the function returns `{ "downloadUrl": ".
 The public handler allows the deployed GitHub Pages origin and localhost development. It accepts only POST and OPTIONS. CORS does not prevent scripts or command-line clients from calling the public endpoint.
 
 Errors are JSON with an `error` message. Expected statuses include 400 for invalid fields/token shape, 404 for unavailable/expired links, 413 for oversized uploads, 429 for rate limit, 503 for storage/configuration failures, and 405 for unsupported methods.
-

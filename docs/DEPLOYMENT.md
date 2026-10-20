@@ -19,7 +19,7 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase db push
 ```
 
-The migration creates the private 50 MiB `pastebox-files` bucket, share metadata, the private rate-limit table, RLS/revokes, and the atomic rate-limit RPC. It also removes the exact legacy public policies created for Pastebox and revokes direct access to the previous `public.files` table, preserving existing rows and Storage objects. It enables `pg_cron` and `pg_net`. Review this behavior against the live project before running `db push`.
+The migrations create the private 50 MiB `pastebox-files` bucket, share metadata, private rate-limit and reservation tables, RLS/revokes, quota and download RPCs, and owner-only usage functions. They also remove the exact legacy public policies created for Pastebox and revoke direct access to the previous `public.files` table, preserving existing rows and Storage objects. They enable `pg_cron` and `pg_net`. Review SQL against the live project before running `db push`.
 
 The migration is a file only until you run it; no SQL was executed during implementation.
 
@@ -30,10 +30,18 @@ In Supabase **Project Settings → Edge Functions → Secrets**, create:
 | Name | Value |
 |---|---|
 | `PASTEBOX_RATE_LIMIT_SECRET` | A newly generated random value with at least 32 bytes of entropy |
+| `PASTEBOX_OWNER_ACCESS_KEY` | A different random owner-only access key (at least 32 bytes); enter it only in the Owner panel when needed |
+| `PASTEBOX_MAX_UPLOADS_PER_HOUR` | Optional integer; default `10` per IP hash |
+| `PASTEBOX_MAX_BYTES_PER_HOUR` | Optional integer byte count; default `209715200` (200 MiB) per IP hash |
+| `PASTEBOX_MAX_STORAGE_BYTES` | Optional integer byte count; default `1073741824` (1 GiB) total stored/reserved volume |
+| `PASTEBOX_MAINTENANCE_MODE` | Optional `true` to pause new uploads while share resolution/downloads continue |
+| `PASTEBOX_ALERT_WEBHOOK_URL` | Optional HTTPS webhook for aggregate storage/egress threshold alerts; receives counts only |
+| `PASTEBOX_STORAGE_ALERT_BYTES` | Optional active/stored volume threshold in bytes for alerting |
+| `PASTEBOX_EGRESS_ALERT_BYTES` | Optional estimated egress threshold in bytes (sum of file size × download count) |
 
 Do not prefix it with `SUPABASE_` and do not use a `VITE_` name. It HMAC-hashes a gateway-provided client IP header before the rate-limit hash is stored; it does not trust caller-provided `X-Forwarded-For`. Supabase automatically provides the API secret keys to the server runtime; do not copy a service-role/secret key into source code or frontend configuration.
 
-The `pastebox-cleanup` function uses `@supabase/server` with `auth: 'secret'`. The deployment config disables the platform's legacy JWT-only check so the function SDK can validate the secret API key itself. Keep cleanup on the secret auth mode; never change it to `none` or `publishable`.
+The `pastebox-cleanup` function uses `@supabase/server` with `auth: 'secret'`. The deployment config disables the platform's legacy JWT-only check so the function SDK can validate the secret API key itself. Keep cleanup on the secret auth mode; never change it to `none` or `publishable`. Do not place owner or webhook values in GitHub Pages variables or any `VITE_` variable.
 
 ## 3. Deploy the two Edge Functions
 
@@ -89,10 +97,23 @@ Use harmless test files on a non-production project first:
 2. Confirm the table has RLS enabled and no public policies or grants. Try direct table and Storage access with a publishable key and confirm it is denied.
 3. Upload a small harmless file; verify the resulting row contains a token hash but not the share token, and that no list endpoint exposes it.
 4. Open the returned link in a private browser window, verify metadata and download, then test a malformed token.
-5. Test 50 MiB acceptance and rejection just above the limit, blank/placeholder name rejection, purpose under 10 characters, and repeated uploads until a 429 appears.
+5. Test 50 MiB acceptance and rejection just above the limit, confirm the upload request contains only the file field, and repeat uploads until a 429 appears.
 6. Set a test row's expiry to the past in a non-production project and confirm resolve/download immediately fail.
 7. Invoke cleanup through the scheduled job and confirm both the Storage object and database row are removed. Check retry behavior after a failed deletion.
 8. Only then publish the frontend when ready.
+
+## Optional domain and alerts
+
+- For a custom domain, configure it under GitHub **Settings → Pages → Custom domain**, add the DNS records GitHub specifies (A/AAAA for an apex or CNAME for a subdomain), wait for DNS checks, then enable HTTPS. For a domain serving this project at `/`, change Vite's `base` in `vite.config.ts` from `/PASTEBOX/` to `/`. Update the service's exact allowed origin in `SHARE_SITE_ORIGINS` and redeploy the Edge Function after a domain change.
+- For usage alerts, configure a private HTTPS webhook in `PASTEBOX_ALERT_WEBHOOK_URL` and set thresholds in bytes. Alerts are cooldown-limited to one per category per six hours and contain aggregate counts only. Estimated egress is a file-size × download-count estimate, not a billing-provider meter.
+- Owner usage is gated by `PASTEBOX_OWNER_ACCESS_KEY` at the Edge Function. Enter it in the UI only when checking usage; it is held in memory and sent over HTTPS in a request header. Never use a Supabase service key for this value.
+- Maintenance mode is a server-side Edge Function secret. Set it to `true` to pause uploads and remove it or set it to `false` to resume them. Existing link resolution and downloads remain enabled.
+
+## PWA, encryption, and resumable transfers
+
+- The PWA caches only the static app shell and built JS/CSS assets. It never caches API responses, share data, signed URLs, or file downloads. The Web Share Target queues files in local IndexedDB and hands them to the normal upload UI; it does not upload until the user confirms.
+- End-to-end encryption is intentionally deferred. A future design should encrypt file bytes in the browser with AES-256-GCM and a fresh random key, put the key only in a URL fragment alongside the random share token, and send only ciphertext to Supabase. The backend would validate the share token without ever receiving the key; no analytics or third-party scripts may run on those pages. Losing the fragment key means the file cannot be recovered. Metadata and traffic sizes would still be visible to the service.
+- Resumable upload is deferred because the current trusted Edge Function receives and validates a complete multipart file. A future implementation should issue a short-lived, object-scoped resumable upload capability server-side, enforce quota and expiry before issuance, finalize only after the backend verifies the uploaded object's size and checksum, and clean abandoned sessions. Do not allow browsers to upload directly using the service-role key.
 
 ## Troubleshooting
 
@@ -103,4 +124,3 @@ Use harmless test files on a non-production project first:
 - **Expired file remains after expiry:** access should be denied immediately. Physical removal waits for the next five-minute Cron run and may retry after a Storage error.
 - **Cleanup is unauthorized:** ensure Vault's `pastebox_cron_api_key` is a Supabase secret key (not publishable) and the function remains secret-only.
 - **Large upload reliability:** the implementation uses the function API and standard Storage upload. Supabase recommends resumable transfers for files above 6 MiB; test at the intended network speeds and plan tier before treating 50 MiB uploads as production-ready.
-
