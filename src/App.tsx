@@ -86,7 +86,7 @@ function App() {
   const [revoking, setRevoking] = useState('')
   const [ownerOpen, setOwnerOpen] = useState(false)
   const [ownerKey, setOwnerKey] = useState('')
-  const [ownerUsage, setOwnerUsage] = useState<ApiResponse['usage']>(null)
+  const [ownerUsage, setOwnerUsage] = useState<ApiResponse['usage'] | null>(null)
   const [shareStats, setShareStats] = useState<Record<string, number>>({})
   const [shareToken, setShareToken] = useState(parseShareToken)
   const [sharedFile, setSharedFile] = useState<SharedFile | null>(null)
@@ -159,7 +159,7 @@ function App() {
   function chooseFile(files?: FileList | File[]) {
     setError('')
     setCopied(false)
-    if (!file) {
+    if (!files || files.length === 0) {
       setSelected([])
       if (fileInput.current) fileInput.current.value = ''
       return
