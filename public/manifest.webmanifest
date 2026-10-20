@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Pastebox",
-  "short_name": "Pastebox",
+  "name": "PasteBox",
+  "short_name": "PasteBox",
   "description": "Temporary file sharing with private, expiring links.",
   "start_url": "./",
   "scope": "./",

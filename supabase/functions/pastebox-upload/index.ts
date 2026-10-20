@@ -150,7 +150,7 @@ async function sendUsageAlerts(admin: { rpc: (...args: any[]) => any }) {
       await fetch(target, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `Pastebox ${kind} usage has reached ${value} bytes (configured alert threshold: ${threshold} bytes).` }),
+        body: JSON.stringify({ text: `PasteBox ${kind} usage has reached ${value} bytes (configured alert threshold: ${threshold} bytes).` }),
         signal: AbortSignal.timeout(3000),
       })
     } catch { /* Alerts must never interrupt a successful file upload. */ }
@@ -179,7 +179,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     } catch {
       return json(request, { error: 'The upload form could not be read.' }, 400)
     }
-    if (!form) return json(request, { error: 'This request is larger than Pastebox accepts. Files must be 50 MB or smaller.' }, 413)
+    if (!form) return json(request, { error: 'This request is larger than PasteBox accepts. Files must be 50 MB or smaller.' }, 413)
 
     const files = form.getAll('file')
     const file = files[0]
@@ -213,10 +213,10 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       { p_ip_hash: ipHash, p_file_size: file.size, p_max_uploads: maxUploads, p_max_bytes: maxBytes, p_max_storage: maxStorage, p_reservation_id: id },
     )
     if (limitError || reservation !== 'ok') {
-      if (limitError) return json(request, { error: 'Pastebox upload protection is temporarily unavailable. Please retry.' }, 503)
+      if (limitError) return json(request, { error: 'PasteBox upload protection is temporarily unavailable. Please retry.' }, 503)
       if (typeof reservation === 'string' && reservation.startsWith('rate:')) return json(request, { error: `Upload limit reached. Retry in about ${Math.max(1, Math.ceil(Number(reservation.slice(5)) / 60))} minute(s).` }, 429)
       if (typeof reservation === 'string' && reservation.startsWith('hourly-volume:')) return json(request, { error: `Hourly upload volume reached. Retry in about ${Math.max(1, Math.ceil(Number(reservation.slice(14)) / 60))} minute(s).` }, 429)
-      if (reservation === 'storage') return json(request, { error: 'Pastebox has reached its configured storage limit. Try again later.' }, 429)
+      if (reservation === 'storage') return json(request, { error: 'PasteBox has reached its configured storage limit. Try again later.' }, 429)
       return json(request, { error: 'Upload could not be accepted. Please retry.' }, 400)
     }
 
@@ -243,7 +243,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
 
     if (pendingError) {
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
-      return json(request, { error: 'Pastebox could not start the upload. Please retry.' }, 503)
+      return json(request, { error: 'PasteBox could not start the upload. Please retry.' }, 503)
     }
 
     const { error: storageError } = await context.supabaseAdmin.storage
@@ -258,7 +258,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       const { error: objectCleanupError } = await context.supabaseAdmin.storage.from(BUCKET).remove([storagePath])
       if (!objectCleanupError) await context.supabaseAdmin.from('pastebox_shares').delete().eq('id', id)
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
-      return json(request, { error: 'Pastebox could not store this file. Please retry.' }, 503)
+      return json(request, { error: 'PasteBox could not store this file. Please retry.' }, 503)
     }
 
     const token = createShareToken()
@@ -282,7 +282,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       const { error: objectCleanupError } = await context.supabaseAdmin.storage.from(BUCKET).remove([storagePath])
       if (!objectCleanupError) await context.supabaseAdmin.from('pastebox_shares').delete().eq('id', id)
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
-      return json(request, { error: 'Pastebox could not finish the upload. Please retry.' }, 503)
+      return json(request, { error: 'PasteBox could not finish the upload. Please retry.' }, 503)
     }
 
     await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
@@ -306,7 +306,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     const ownerKey = Deno.env.get('PASTEBOX_OWNER_ACCESS_KEY') ?? ''
     if (!ownerKey || !secureEqual(provided, ownerKey)) return json(request, { error: 'This owner view is unavailable.' }, 404)
     const { data, error } = await context.supabaseAdmin.rpc('get_pastebox_owner_usage')
-    if (error) return json(request, { error: 'Pastebox usage is temporarily unavailable.' }, 503)
+    if (error) return json(request, { error: 'PasteBox usage is temporarily unavailable.' }, 503)
     return json(request, { usage: data?.[0] ?? null })
   }
 
@@ -328,7 +328,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     } })
     if (managed.status !== 'active') return json(request, { error: 'This upload is already unavailable.' }, 409)
     const { error } = await context.supabaseAdmin.from('pastebox_shares').update({ status: 'revoked' }).eq('id', managed.id).eq('status', 'active')
-    if (error) return json(request, { error: 'Pastebox could not revoke this upload. Please retry.' }, 503)
+    if (error) return json(request, { error: 'PasteBox could not revoke this upload. Please retry.' }, 503)
     return json(request, { ok: true })
   }
 
@@ -359,7 +359,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     .createSignedUrl(share.storage_path, expiresIn, { download: share.original_name })
 
   if (signError || !signed?.signedUrl) {
-    return json(request, { error: 'Pastebox could not prepare this download. Please retry.' }, 503)
+    return json(request, { error: 'PasteBox could not prepare this download. Please retry.' }, 503)
   }
 
   const { data: canDownload, error: downloadError } = await context.supabaseAdmin.rpc(

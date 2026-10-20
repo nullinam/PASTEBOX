@@ -74,7 +74,7 @@ async function postJson(payload: Record<string, string>, signal?: AbortSignal, e
     signal,
   })
   const result = await response.json().catch(() => ({})) as ApiResponse
-  if (!response.ok) throw new Error(result.error || 'Pastebox could not complete that request.')
+  if (!response.ok) throw new Error(result.error || 'PasteBox could not complete that request.')
   return result
 }
 
@@ -232,7 +232,7 @@ function App() {
         const fileLabel = `${index + 1} of ${pending.length} · ${pending[index].name}`
         setUploadStage(`Checking ${fileLabel}…`)
         const result = await uploadWithProgress(pending[index], await fileChecksum(pending[index]), fileLabel)
-        if (!result.token || !result.revokeToken || !result.file) throw new Error('The upload finished, but Pastebox could not create a secure share link. Please retry.')
+        if (!result.token || !result.revokeToken || !result.file) throw new Error('The upload finished, but PasteBox could not create a secure share link. Please retry.')
         setCreatedShares(current => [...current, { token: result.token!, revokeToken: result.revokeToken!, file: result.file! }])
         setSelected(pending.slice(index + 1))
       }
@@ -278,7 +278,7 @@ function App() {
       await postJson({ action: 'revoke', revokeToken })
       setCreatedShares(current => current.filter(item => item.revokeToken !== revokeToken))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Pastebox could not revoke this share. Please retry.')
+      setError(cause instanceof Error ? cause.message : 'PasteBox could not revoke this share. Please retry.')
     } finally {
       setRevoking('')
     }
@@ -312,7 +312,7 @@ function App() {
 
   async function shareNative(url: string) {
     if (navigator.share) {
-      try { await navigator.share({ title: 'Pastebox file', url }) }
+      try { await navigator.share({ title: 'PasteBox file', url }) }
       catch (cause) { if (cause instanceof Error && cause.name !== 'AbortError') setError('Share was unavailable. Copy the link instead.') }
     } else await copyText(url)
   }
@@ -323,10 +323,10 @@ function App() {
     setError('')
     try {
       const result = await postJson({ action: 'download', token: shareToken })
-      if (!result.downloadUrl) throw new Error('Pastebox could not prepare this download. Please retry.')
+      if (!result.downloadUrl) throw new Error('PasteBox could not prepare this download. Please retry.')
       const target = new URL(result.downloadUrl)
       const apiOrigin = new URL(API).origin
-      if (target.origin !== apiOrigin) throw new Error('Pastebox returned an unexpected download location.')
+      if (target.origin !== apiOrigin) throw new Error('PasteBox returned an unexpected download location.')
       if (sharedFile?.deleteAfterFirstDownload) setSharedFile({ ...sharedFile, expiresAt: new Date().toISOString() })
       const response = await fetch(target.href, { cache: 'no-store', referrerPolicy: 'no-referrer' })
       if (!response.ok) throw new Error('The download could not be completed. Please retry while the link is active.')
@@ -355,9 +355,9 @@ function App() {
   return (
     <main className="page-shell" id="top">
       <header className="topbar">
-        <a className="brand" href={import.meta.env.BASE_URL} onClick={event => { if (isSharePage) { event.preventDefault(); leaveSharePage() } }} aria-label="Pastebox home">
+        <a className="brand" href={import.meta.env.BASE_URL} onClick={event => { if (isSharePage) { event.preventDefault(); leaveSharePage() } }} aria-label="PasteBox home">
           <img className="brand-mark" src={import.meta.env.BASE_URL + 'pastebox-icon.svg'} alt="" />
-          <span>pastebox</span>
+          <span>PasteBox</span>
         </a>
         <span className="top-note"><span className="status-dot" /> LINK-ONLY FILE SHARING</span>
         <button className="owner-toggle" type="button" onClick={() => setOwnerOpen(open => !open)}>Owner</button>
@@ -462,7 +462,7 @@ function App() {
 
             <div className="privacy-notice">
               <strong>Before you share</strong>
-                <p>Anyone with a share link can download its file. Links can be forwarded. Pastebox does not scan files, and downloaded copies stay with recipients after the Pastebox copy expires.</p>
+                <p>Anyone with a share link can download its file. Links can be forwarded. PasteBox does not scan files, and downloaded copies stay with recipients after the PasteBox copy expires.</p>
             </div>
 
             {!storageReady && <p className="service-note" role="status">Storage setup is not finished. The upload will be available when the public function URL and publishable key are configured.</p>}
@@ -527,7 +527,7 @@ function App() {
                 </button>
                 <button className="text-button upload-another" type="button" onClick={leaveSharePage}>Upload another file <span aria-hidden="true">↗</span></button>
               </div>
-              <p className="download-note">Downloads are delivered as files. Pastebox doesn’t preview or scan uploads.</p>
+              <p className="download-note">Downloads are delivered as files. PasteBox doesn’t preview or scan uploads.</p>
             </div>
           ) : (
             <div className="expired-state" key="share-expired">
@@ -535,7 +535,7 @@ function App() {
               <p className="step-label">SHARE LINK UNAVAILABLE</p>
               <h2>{error ? 'This link can’t be opened.' : 'This share has expired.'}</h2>
               <p>{error || 'Files are available for six hours after upload. Ask the sender to create a new link.'}</p>
-              <button className="submit-button" type="button" onClick={leaveSharePage}>Back to Pastebox <span aria-hidden="true">↗</span></button>
+              <button className="submit-button" type="button" onClick={leaveSharePage}>Back to PasteBox <span aria-hidden="true">↗</span></button>
             </div>
           )}
         </section>
