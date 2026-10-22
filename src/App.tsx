@@ -57,6 +57,13 @@ function formattedDate(value: string) {
   }).format(new Date(value))
 }
 
+function readableError(cause: unknown, fallback: string) {
+  if (cause instanceof TypeError || (cause instanceof Error && /failed to fetch|networkerror|load failed/i.test(cause.message))) {
+    return 'PasteBox could not reach its file service. Check your connection or network restrictions, then retry.'
+  }
+  return cause instanceof Error ? cause.message : fallback
+}
+
 async function fileChecksum(file: Blob) {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
@@ -90,6 +97,7 @@ function App() {
   const [shareStats, setShareStats] = useState<Record<string, number>>({})
   const [shareToken, setShareToken] = useState(parseShareToken)
   const [sharedFile, setSharedFile] = useState<SharedFile | null>(null)
+  const [shareAttempt, setShareAttempt] = useState(0)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploading, setUploading] = useState(false)
   const [uploadStage, setUploadStage] = useState('')
@@ -100,6 +108,7 @@ function App() {
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
+  const [online, setOnline] = useState(() => navigator.onLine)
 
   const storageReady = Boolean(API && PUBLISHABLE_KEY)
   const shareUrl = shareToken
@@ -110,6 +119,16 @@ function App() {
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    const setConnectionState = () => setOnline(navigator.onLine)
+    window.addEventListener('online', setConnectionState)
+    window.addEventListener('offline', setConnectionState)
+    return () => {
+      window.removeEventListener('online', setConnectionState)
+      window.removeEventListener('offline', setConnectionState)
+    }
   }, [])
 
   useEffect(() => {
@@ -150,11 +169,11 @@ function App() {
     postJson({ action: 'resolve', token: shareToken }, controller.signal)
       .then(result => setSharedFile(result.file ?? null))
       .catch(cause => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'This share link is invalid or has expired.')
+        if (!controller.signal.aborted) setError(readableError(cause, 'This share link is invalid or has expired.'))
       })
       .finally(() => { if (!controller.signal.aborted) setLoadingShare(false) })
     return () => controller.abort()
-  }, [shareToken, sharedFile])
+  }, [shareToken, sharedFile, shareAttempt])
 
   function chooseFile(files?: FileList | File[]) {
     setError('')
@@ -221,6 +240,7 @@ function App() {
     setError('')
     setCopied(false)
 
+    if (!online) return setError('You appear to be offline. Reconnect to the internet, then retry without selecting the files again.')
     if (!selected.length) return setError('Choose at least one file before uploading.')
     if (!storageReady) return setError('File storage is not configured yet. See the setup guide in the repository.')
 
@@ -241,7 +261,9 @@ function App() {
       setUploadProgress(100)
       setUploadStage('Your links are ready')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Upload failed. Your remaining files are ready to retry.')
+      setUploadProgress(0)
+      setUploadStage('')
+      setError(`${readableError(cause, 'Upload failed.')} Your remaining files are ready to retry without selecting them again.`)
     } finally {
       setUploading(false)
     }
@@ -278,7 +300,7 @@ function App() {
       await postJson({ action: 'revoke', revokeToken })
       setCreatedShares(current => current.filter(item => item.revokeToken !== revokeToken))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'PasteBox could not revoke this share. Please retry.')
+      setError(readableError(cause, 'PasteBox could not revoke this share. Please retry.'))
     } finally {
       setRevoking('')
     }
@@ -289,7 +311,7 @@ function App() {
       const result = await postJson({ action: 'owner-stats', revokeToken })
       setShareStats(current => ({ ...current, [revokeToken]: result.stats?.downloads ?? 0 }))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Download count is temporarily unavailable.')
+      setError(readableError(cause, 'Download count is temporarily unavailable.'))
     }
   }
 
@@ -306,7 +328,7 @@ function App() {
       setError('')
     } catch (cause) {
       setOwnerUsage(null)
-      setError(cause instanceof Error ? cause.message : 'Usage is temporarily unavailable.')
+      setError(readableError(cause, 'Usage is temporarily unavailable.'))
     }
   }
 
@@ -344,7 +366,7 @@ function App() {
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Download failed. Please retry.')
+      setError(readableError(cause, 'Download failed. Please retry.'))
     } finally {
       setDownloading(false)
     }
@@ -387,6 +409,8 @@ function App() {
           <span className="expiry-caption">Then access is removed automatically.</span>
         </aside>
       </section>
+
+      {!online && <p className="service-note offline-note" role="status">You’re offline. Selected files stay in this page; reconnect to continue.</p>}
 
       {!isSharePage ? (
         <section className="workspace" aria-label="Upload a file">
@@ -466,7 +490,7 @@ function App() {
             </div>
 
             {!storageReady && <p className="service-note" role="status">Storage setup is not finished. The upload will be available when the public function URL and publishable key are configured.</p>}
-            {error && <p className="message error" role="alert">{error}</p>}
+            {error && <div className="error-group"><p className="message error" role="alert">{error}</p>{selected.length > 0 && !uploading && <p className="retry-hint">{selected.length} {selected.length === 1 ? 'file is' : 'files are'} still selected. Retry when ready.</p>}</div>}
 
             {uploading && (
               <div className="progress-block" role="status" aria-live="polite">
@@ -480,7 +504,7 @@ function App() {
             <div className="form-footer">
               <p className="link-warning"><span aria-hidden="true">↗</span> Anyone with the link can download it until it expires.</p>
               <button className="submit-button" type="submit" disabled={uploading || !storageReady}>
-                {uploading ? 'Uploading…' : 'Create share link'} <span aria-hidden="true">↗</span>
+                {uploading ? 'Uploading…' : error && selected.length ? `Retry ${selected.length === 1 ? 'upload' : 'remaining uploads'}` : 'Create share link'} <span aria-hidden="true">↗</span>
               </button>
             </div>
           </form>
@@ -535,6 +559,7 @@ function App() {
               <p className="step-label">SHARE LINK UNAVAILABLE</p>
               <h2>{error ? 'This link can’t be opened.' : 'This share has expired.'}</h2>
               <p>{error || 'Files are available for six hours after upload. Ask the sender to create a new link.'}</p>
+              {error && <button className="text-button retry-share" type="button" disabled={loadingShare || !online} onClick={() => { setError(''); setShareAttempt(attempt => attempt + 1) }}>{loadingShare ? 'Checking link…' : 'Try checking the link again'}</button>}
               <button className="submit-button" type="button" onClick={leaveSharePage}>Back to PasteBox <span aria-hidden="true">↗</span></button>
             </div>
           )}
@@ -550,3 +575,4 @@ function App() {
 }
 
 export default App
+

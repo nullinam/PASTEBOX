@@ -43,6 +43,11 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+function logUploadFailure(stage: string) {
+  // Never log request bodies, share/revoke tokens, filenames, storage paths, or client IPs.
+  console.error(JSON.stringify({ event: 'pastebox_upload_failure', stage }))
+}
+
 function createShareToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   let binary = ''
@@ -213,7 +218,10 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       { p_ip_hash: ipHash, p_file_size: file.size, p_max_uploads: maxUploads, p_max_bytes: maxBytes, p_max_storage: maxStorage, p_reservation_id: id },
     )
     if (limitError || reservation !== 'ok') {
-      if (limitError) return json(request, { error: 'PasteBox upload protection is temporarily unavailable. Please retry.' }, 503)
+      if (limitError) {
+        logUploadFailure('rate_limit_reservation')
+        return json(request, { error: 'PasteBox upload protection is temporarily unavailable. Please retry.' }, 503)
+      }
       if (typeof reservation === 'string' && reservation.startsWith('rate:')) return json(request, { error: `Upload limit reached. Retry in about ${Math.max(1, Math.ceil(Number(reservation.slice(5)) / 60))} minute(s).` }, 429)
       if (typeof reservation === 'string' && reservation.startsWith('hourly-volume:')) return json(request, { error: `Hourly upload volume reached. Retry in about ${Math.max(1, Math.ceil(Number(reservation.slice(14)) / 60))} minute(s).` }, 429)
       if (reservation === 'storage') return json(request, { error: 'PasteBox has reached its configured storage limit. Try again later.' }, 429)
@@ -242,6 +250,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     })
 
     if (pendingError) {
+      logUploadFailure('create_pending_record')
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
       return json(request, { error: 'PasteBox could not start the upload. Please retry.' }, 503)
     }
@@ -255,6 +264,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       })
 
     if (storageError) {
+      logUploadFailure('store_object')
       const { error: objectCleanupError } = await context.supabaseAdmin.storage.from(BUCKET).remove([storagePath])
       if (!objectCleanupError) await context.supabaseAdmin.from('pastebox_shares').delete().eq('id', id)
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
@@ -279,6 +289,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       .maybeSingle()
 
     if (activationError || !activated) {
+      logUploadFailure('activate_share')
       const { error: objectCleanupError } = await context.supabaseAdmin.storage.from(BUCKET).remove([storagePath])
       if (!objectCleanupError) await context.supabaseAdmin.from('pastebox_shares').delete().eq('id', id)
       await context.supabaseAdmin.from('pastebox_upload_reservations').delete().eq('id', id)
@@ -377,3 +388,4 @@ export default {
     return handler(request)
   },
 }
+

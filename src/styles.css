@@ -25,6 +25,7 @@ html { min-width: 320px; min-height: 100%; background: #f8f7f4; }
 body { min-width: 320px; min-height: 100vh; margin: 0; }
 button, input, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #c51f4666; outline-offset: 3px; }
 ::selection { color: #71203a; background: #f6dce3; }
 
 .page-shell { width: min(100% - 56px, 1016px); margin: 0 auto; padding-bottom: 27px; animation: page-enter .42s cubic-bezier(.2,.7,.25,1) both; }
@@ -108,6 +109,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .service-note, .message { margin: 14px 0 0; padding: 10px 12px; border-radius: 7px; font-size: 11px; line-height: 1.55; }
 .service-note { border: 1px solid #eee2c7; background: #fffbf1; color: #786039; }
 .message.error { border: 1px solid #f0d5da; background: #fff4f6; color: #9e2e47; animation: state-enter .2s ease-out both; }
+.error-group { animation: state-enter .2s ease-out both; }
+.error-group .message { margin-bottom: 0; }
+.retry-hint { margin: 6px 0 0; color: #77736d; font-size: 10px; line-height: 1.5; }
+.offline-note { border-color: #e9d9b8; background: #fff9ec; color: #765a2a; }
 .progress-block { margin-top: 17px; animation: state-enter .2s ease-out both; }
 .progress-copy { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: #68645e; font-size: 10px; }
 .progress-copy strong { color: var(--accent); font-variant-numeric: tabular-nums; }
@@ -159,6 +164,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .expired-state h2 { margin-top: 9px; font-size: 25px; }
 .expired-state > p:not(.step-label) { margin: 9px 0 18px; color: #77736d; font-size: 12px; line-height: 1.6; }
 .expired-state .submit-button { min-width: 160px; }
+.retry-share { min-height: 42px; margin: -5px 0 12px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #5e5952; }
 
 .footer { display: flex; justify-content: space-between; gap: 12px; padding: 17px 2px 0; color: #9d9a93; font-size: 9px; }
 
@@ -183,10 +189,10 @@ button { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 520px) {
   .page-shell { width: min(100% - 30px, 440px); }
   .top-note { gap: 7px; font-size: 8px; letter-spacing: .08em; }
-  .owner-toggle { padding: 6px 8px; font-size: 9px; }
+  .owner-toggle { min-height: 42px; padding: 8px 10px; font-size: 10px; }
   .owner-panel { align-items: stretch; }
   .owner-panel input { min-width: 0; flex: 1; }
-  .created-share-actions { gap: 7px 10px; }
+  .created-share-actions { gap: 7px 8px; }
   .intro { position: relative; display: block; padding: 43px 0 27px; }
   .intro h1 { margin-top: 15px; font-size: clamp(42px, 12.5vw, 54px); letter-spacing: -.07em; }
   .intro-description { max-width: 270px; font-size: 12px; }
@@ -207,7 +213,9 @@ button { -webkit-tap-highlight-color: transparent; }
   .share-heading > p:last-child { font-size: 11px; }
   .share-link-box { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px; }
   .share-link-value { font-size: 10px; }
-  .copy-button { min-height: 37px; }
+  .copy-button { min-height: 44px; }
+  .text-button { min-height: 42px; padding: 8px 10px; font-size: 11px; }
+  .created-share-actions .text-button { min-height: 42px; }
   .shared-file-card { padding: 15px 13px; }
   .shared-file-name h3 { max-width: 100%; font-size: 13px; }
   .details-grid { grid-template-columns: 1fr 1fr; gap: 13px 9px; }
@@ -218,6 +226,22 @@ button { -webkit-tap-highlight-color: transparent; }
   .footer { font-size: 8px; }
 }
 
+@media (max-width: 390px) {
+  .top-note { max-width: 118px; font-size: 7px; }
+  .intro { padding-bottom: 18px; }
+  .intro-description { max-width: 100%; padding-right: 0; }
+  .expiry-card { position: static; width: 100%; margin-top: 17px; }
+  .expiry-caption { font-size: 9px; }
+  .workspace { padding-right: 12px; padding-left: 12px; }
+  .created-share-actions { align-items: stretch; }
+  .created-share-actions button { flex: 1 1 auto; }
+  .details-grid { grid-template-columns: 1fr; }
+  .countdown-detail { grid-column: auto; }
+  .shared-file-top { flex-wrap: wrap; }
+  .shared-file-name { flex-basis: calc(100% - 56px); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
