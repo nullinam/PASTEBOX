@@ -129,7 +129,6 @@ function toPublicFile(row: Record<string, unknown>) {
     uploadedAt: row.uploaded_at,
     expiresAt: row.expires_at,
     checksum: row.checksum_sha256,
-    deleteAfterFirstDownload: row.delete_after_first_download,
   }
 }
 
@@ -189,12 +188,11 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     const files = form.getAll('file')
     const file = files[0]
     for (const key of form.keys()) {
-      if (!['file', 'checksum', 'delete_after_first_download'].includes(key)) {
+      if (!['file', 'checksum'].includes(key)) {
         return json(request, { error: 'Unsupported upload field.' }, 400)
       }
     }
     const checksum = form.get('checksum')
-    const deleteAfterFirstDownload = form.get('delete_after_first_download') === 'true'
 
     if (files.length !== 1 || !(file instanceof File)) {
       return json(request, { error: 'Choose exactly one file.' }, 400)
@@ -202,7 +200,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
     if (file.size < 1) return json(request, { error: 'Empty files cannot be uploaded.' }, 400)
     if (file.size > MAX_FILE_BYTES) return json(request, { error: 'Files must be 50 MB or smaller.' }, 413)
 
-    if (files.length !== 1 || form.getAll('checksum').length !== 1 || form.getAll('delete_after_first_download').length !== 1
+    if (files.length !== 1 || form.getAll('checksum').length !== 1
       || typeof checksum !== 'string' || !/^[a-f0-9]{64}$/.test(checksum)) {
       return json(request, { error: 'Choose one file and retry the upload.' }, 400)
     }
@@ -245,7 +243,6 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       file_size: file.size,
       revoke_token_hash: revokeTokenHash,
       checksum_sha256: actualChecksum,
-      delete_after_first_download: deleteAfterFirstDownload,
       status: 'pending',
     })
 
@@ -285,7 +282,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
       })
       .eq('id', id)
       .eq('status', 'pending')
-      .select('original_name, file_size, uploaded_at, expires_at, checksum_sha256, delete_after_first_download')
+      .select('original_name, file_size, uploaded_at, expires_at, checksum_sha256')
       .maybeSingle()
 
     if (activationError || !activated) {
@@ -350,7 +347,7 @@ const handler = withSupabase({ auth: 'publishable' }, async (request, context) =
   const tokenHash = await sha256(payload.token)
   const { data: share, error: lookupError } = await context.supabaseAdmin
     .from('pastebox_shares')
-    .select('id, token_hash, storage_path, original_name, file_size, uploaded_at, expires_at, status, checksum_sha256, delete_after_first_download, download_count')
+    .select('id, token_hash, storage_path, original_name, file_size, uploaded_at, expires_at, status, checksum_sha256, download_count')
     .eq('token_hash', tokenHash)
     .eq('status', 'active')
     .maybeSingle()

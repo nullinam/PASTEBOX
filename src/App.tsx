@@ -6,7 +6,6 @@ type SharedFile = {
   uploadedAt: string
   expiresAt: string
   checksum?: string
-  deleteAfterFirstDownload?: boolean
 }
 
 type ApiResponse = {
@@ -89,7 +88,6 @@ function App() {
   const fileInput = useRef<HTMLInputElement>(null)
   const [selected, setSelected] = useState<File[]>([])
   const [createdShares, setCreatedShares] = useState<CreatedShare[]>([])
-  const [deleteAfterFirstDownload, setDeleteAfterFirstDownload] = useState(false)
   const [revoking, setRevoking] = useState('')
   const [ownerOpen, setOwnerOpen] = useState(false)
   const [ownerKey, setOwnerKey] = useState('')
@@ -229,7 +227,6 @@ function App() {
       const body = new FormData()
       body.append('file', file)
       body.append('checksum', checksum)
-      body.append('delete_after_first_download', String(deleteAfterFirstDownload))
       setUploadStage(`${fileLabel} · Preparing your private share link…`)
       request.send(body)
     })
@@ -349,7 +346,6 @@ function App() {
       const target = new URL(result.downloadUrl)
       const apiOrigin = new URL(API).origin
       if (target.origin !== apiOrigin) throw new Error('PasteBox returned an unexpected download location.')
-      if (sharedFile?.deleteAfterFirstDownload) setSharedFile({ ...sharedFile, expiresAt: new Date().toISOString() })
       const response = await fetch(target.href, { cache: 'no-store', referrerPolicy: 'no-referrer' })
       if (!response.ok) throw new Error('The download could not be completed. Please retry while the link is active.')
       const blob = await response.blob()
@@ -479,11 +475,6 @@ function App() {
               </div>
             ))}
 
-            <label className="privacy-option">
-              <input type="checkbox" checked={deleteAfterFirstDownload} onChange={event => setDeleteAfterFirstDownload(event.target.checked)} disabled={uploading} />
-              <span><strong>Remove after the first download link is used</strong><small>Each file link stops working as soon as a download is prepared.</small></span>
-            </label>
-
             <div className="privacy-notice">
               <strong>Before you share</strong>
                 <p>Anyone with a share link can download its file. Links can be forwarded. PasteBox does not scan files, and downloaded copies stay with recipients after the PasteBox copy expires.</p>
@@ -518,7 +509,7 @@ function App() {
               <div className="share-heading">
                 <p className="step-label">02 <span>/</span> LINK-ONLY SHARE</p>
                 <h2>Your file is ready.</h2>
-                <p>{sharedFile.deleteAfterFirstDownload ? 'This file allows one download attempt. Once its download is prepared, the link is revoked.' : 'Anyone with this link can download the file while it’s active. Keep the link within your circle.'}</p>
+                <p>Anyone with this link can download the file while it’s active. Keep the link within your circle.</p>
               </div>
 
               <div className="share-link-box">
@@ -547,7 +538,7 @@ function App() {
               {error && <p className="message error" role="alert">{error}</p>}
               <div className="share-actions">
                 <button className="download-button" type="button" onClick={downloadFile} disabled={downloading || expired}>
-                  {downloading ? 'Verifying download…' : sharedFile.deleteAfterFirstDownload ? 'Get one download' : 'Download file'} <span aria-hidden="true">↓</span>
+                  {downloading ? 'Verifying download…' : 'Download file'} <span aria-hidden="true">↓</span>
                 </button>
                 <button className="text-button upload-another" type="button" onClick={leaveSharePage}>Upload another file <span aria-hidden="true">↗</span></button>
               </div>

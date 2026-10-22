@@ -61,7 +61,7 @@ Pending rows expire after 30 minutes. The scheduled cleanup removes abandoned pe
 | `revoke_token_hash` | Unique SHA-256 hash of private revoke capability; never returned after upload |
 | `checksum_sha256` | SHA-256 of stored file bytes |
 | `download_count` | Private count used for uploader-only stats |
-| `delete_after_first_download` | Atomic one-download setting |
+| `delete_after_first_download` | Legacy compatibility column; new uploads do not enable one-download deletion |
 | `status` | `pending` during upload; `active` after upload succeeds |
 | `created_at` | Pending row creation time |
 | `pending_expires_at` | Abandoned-upload cleanup time |
@@ -89,3 +89,4 @@ Supabase Cron invokes `pastebox-cleanup` every five minutes. The function requir
 - Share links grant access to anyone possessing the link until expiry. The token is random, not filename- or row-derived.
 - No service key, database password, Vault secret, upload, or usable share token belongs in Git.
 - Browser-side PWA caching is restricted to the static app shell and built assets. It excludes Edge Function responses, share payloads, signed Storage URLs, and file bytes.
+
