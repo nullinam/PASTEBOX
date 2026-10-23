@@ -105,7 +105,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .service-note { border: 1px solid #eee2c7; background: #fffbf1; color: #786039; }
 .message.error { border: 1px solid #f0d5da; background: #fff4f6; color: #9e2e47; animation: state-enter .2s ease-out both; }
 .error-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.error-notice p { margin: 0; }
+.error-notice p { min-width: 0; flex: 1; margin: 0; overflow-wrap: anywhere; }
 .inline-help { flex: 0 0 auto; padding: 5px 8px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; font-size: 10px; font-weight: 600; text-decoration: none; }
 .inline-help:hover { background: #ffffffa8; }
 .help-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -200,6 +200,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
   .page-shell { width: min(100% - 30px, 440px); }
   .top-note { gap: 7px; font-size: 8px; letter-spacing: .08em; }
   .created-share-actions { gap: 7px 8px; }
+  .error-notice { align-items: flex-start; }
   .intro { position: relative; display: block; padding: 43px 0 27px; }
   .intro h1 { margin-top: 15px; font-size: clamp(42px, 12.5vw, 54px); letter-spacing: -.07em; }
   .intro-description { max-width: 270px; font-size: 12px; }
