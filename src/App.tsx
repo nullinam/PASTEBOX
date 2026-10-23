@@ -69,13 +69,37 @@ function errorHelpGuide(message: string): HelpGuide {
   if (/empty|50 mb|too large|choose at least one|select a file/.test(issue)) {
     return { title: 'Check the selected file', intro: 'PasteBox accepts non-empty files up to 50 MB each.', steps: ['Choose a file that contains data and is no larger than 50 MB.', 'Remove the file that triggered the message, then select it again.', 'If it is too large, compress it or split it into smaller files before uploading.'] }
   }
+  if (/upload limit reached|hourly upload volume reached|retry in about/.test(issue)) {
+    return { title: 'Wait for the upload limit to reset', intro: 'PasteBox temporarily limits uploads to protect the shared service.', steps: ['Wait for the number of minutes shown in the message, then retry.', 'Avoid repeatedly resubmitting while the limit is active.', 'If the limit message appears much later, check the Supabase function logs and upload-limit configuration.'] }
+  }
+  if (/configured storage limit|reached its configured storage limit/.test(issue)) {
+    return { title: 'PasteBox storage is full', intro: 'The service has reached its configured storage capacity.', steps: ['Wait for expired files to be cleaned up, then retry.', 'If the message continues, the PasteBox owner needs to check storage usage and capacity in Supabase.', 'Do not upload the same file repeatedly while the limit is active.'] }
+  }
+  if (/maintenance|upload protection|reservation|could not (start|store|finish) the upload|could not accept/.test(issue)) {
+    return { title: 'The upload service needs attention', intro: 'PasteBox could not prepare or complete the upload safely.', steps: ['Wait a minute and retry once. The selected files remain ready in this page.', 'If the error repeats, the PasteBox owner should check the pastebox-upload Edge Function logs and confirm its required Supabase secrets and upload-reservation database function are configured.', 'Do not put a Supabase secret or service-role key into the website or GitHub Pages variables.'] }
+  }
+  if (/upload finished.*create|could not create.*share|selected file changed/.test(issue)) {
+    return { title: 'Retry creating the share link', intro: 'The file or upload may have changed while PasteBox was preparing its share.', steps: ['Select the file again and retry once.', 'If an upload already completed, check the ready-to-share section before repeating it.', 'If the message repeats, the PasteBox owner should check the Edge Function logs.'] }
+  }
+  if (/origin is not allowed/.test(issue)) {
+    return { title: 'This website address is not allowed', intro: 'The upload service is configured to accept requests only from approved PasteBox addresses.', steps: ['Open PasteBox using its official GitHub Pages address.', 'If you reached this page through a custom domain or preview URL, ask the PasteBox owner to add that exact site origin to the Edge Function allowlist.', 'Refresh the site after the owner redeploys the function.'] }
+  }
+  if (/unsupported request|unsupported upload field|unknown action|invalid request body|request format/.test(issue)) {
+    return { title: 'Refresh PasteBox and retry', intro: 'The website and file service may be using different versions.', steps: ['Refresh PasteBox and retry the action.', 'If the same message appears, the PasteBox owner should confirm the Pages site and Edge Function have both been updated.', 'Do not retry by repeatedly submitting the same request.'] }
+  }
+  if (/upload was cancelled/.test(issue)) {
+    return { title: 'Restart the upload', intro: 'The upload was cancelled before it finished.', steps: ['Select the file again if it is no longer listed.', 'Check your connection, then choose Create share link.', 'Keep PasteBox open until the link is shown.'] }
+  }
+  if (/share was unavailable/.test(issue)) {
+    return { title: 'Share the link manually', intro: 'This browser or device does not support its native share sheet right now.', steps: ['Choose Copy link and paste it into your messaging app.', 'If copying is blocked, select and copy the link text manually.', 'The recipient needs the complete link to open the file.'] }
+  }
   if (/offline|connection|network|reach its file service|failed to fetch|temporarily unavailable|timed out/.test(issue)) {
     return { title: 'Check the connection to PasteBox', intro: 'The browser could not complete a request to PasteBox or Supabase.', steps: ['Check that this device is online, then refresh PasteBox and retry.', 'If you are on a managed or restricted network, try another network allowed by your organization. Network filters may block the Supabase file-service domain.', 'If it fails on multiple networks, check the Supabase status page or try again later. Your selected files remain in the page until you leave or refresh it.'] }
   }
   if (/not configured|configuration|storage setup|protection is not configured/.test(issue)) {
     return { title: 'Finish the PasteBox setup', intro: 'The website does not have the public function settings it needs, or the backend is missing required configuration.', steps: ['Check the repository setup guide for the required GitHub Pages build variables and Supabase Function secrets.', 'After changing GitHub Pages variables, trigger a new Pages build so the settings are included in the published site.', 'If the site settings are correct, check the Supabase Edge Function logs and confirm the function is deployed. Do not add secret keys to frontend variables.'] }
   }
-  if (/expired|invalid|link can.t be opened|share link/.test(issue)) {
+  if (/expired|invalid.*share|share.*invalid|link can.t be opened|share link|no longer available|already unavailable/.test(issue)) {
     return { title: 'Check the share link', intro: 'Share links work for six hours and stop working if they are expired or revoked.', steps: ['Make sure you opened the complete PasteBox link, including the part after the # symbol.', 'If the link is older than six hours, ask the sender to upload the file again and send a new link.', 'If it was revoked, the sender must create a new share.'] }
   }
   if (/checksum|did not match|integrity/.test(issue)) {
@@ -84,14 +108,14 @@ function errorHelpGuide(message: string): HelpGuide {
   if (/copy was blocked|clipboard|copy/.test(issue)) {
     return { title: 'Copy the link another way', intro: 'The browser did not allow PasteBox to write to the clipboard.', steps: ['Use the visible share link or the address bar and select the full link manually.', 'Allow clipboard access for this site if your browser asks.', 'On a restricted device, copy the link using the browser or operating-system copy command.'] }
   }
-  if (/revoke/.test(issue)) {
+  if (/management key|revoke/.test(issue)) {
     return { title: 'Troubleshoot revoking this share', intro: 'Revoking a share requires the private revoke key created with the upload.', steps: ['Use the private revoke key shown with that upload; it is different from the share link.', 'If the key was lost, it cannot be recovered. The file will still expire automatically after six hours.', 'If the share is already revoked or expired, it is no longer available.'] }
   }
   if (/download/.test(issue)) {
     return { title: 'Troubleshoot the download', intro: 'Downloads are available only while the share link is active.', steps: ['Check the expiry countdown and confirm the device has enough free storage.', 'Retry on a stable network that can reach the Supabase file-service domain.', 'If the link expired or the download repeatedly fails, ask the sender to create a fresh share.'] }
   }
-  if (/share was unavailable/.test(issue)) {
-    return { title: 'Share the link manually', intro: 'This browser or device does not support its native share sheet right now.', steps: ['Choose Copy link and paste it into your messaging app.', 'If copying is blocked, select and copy the link text manually.', 'The recipient needs the complete link to open the file.'] }
+  if (/unexpected download location/.test(issue)) {
+    return { title: 'The download location failed a safety check', intro: 'PasteBox refused a download address that did not match the configured file service.', steps: ['Do not follow or copy an unexpected download address.', 'Refresh PasteBox and retry the download once.', 'If this repeats, stop and ask the PasteBox owner to check the download function configuration and logs.'] }
   }
   return { title: 'Try the request again', intro: 'PasteBox could not finish that action.', steps: ['Check your connection and try again.', 'For a share link, make sure it has not expired or been revoked.', 'If the problem continues, note the message and check the PasteBox setup guide or Supabase Function logs.'] }
 }
