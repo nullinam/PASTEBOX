@@ -62,6 +62,47 @@ function readableError(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback
 }
 
+type HelpGuide = { title: string; intro: string; steps: string[] }
+
+function errorHelpGuide(message: string): HelpGuide {
+  const issue = message.toLowerCase()
+  if (/empty|50 mb|too large|choose at least one|select a file/.test(issue)) {
+    return { title: 'Check the selected file', intro: 'PasteBox accepts non-empty files up to 50 MB each.', steps: ['Choose a file that contains data and is no larger than 50 MB.', 'Remove the file that triggered the message, then select it again.', 'If it is too large, compress it or split it into smaller files before uploading.'] }
+  }
+  if (/offline|connection|network|reach its file service|failed to fetch|temporarily unavailable|timed out/.test(issue)) {
+    return { title: 'Check the connection to PasteBox', intro: 'The browser could not complete a request to PasteBox or Supabase.', steps: ['Check that this device is online, then refresh PasteBox and retry.', 'If you are on a managed or restricted network, try another network allowed by your organization. Network filters may block the Supabase file-service domain.', 'If it fails on multiple networks, check the Supabase status page or try again later. Your selected files remain in the page until you leave or refresh it.'] }
+  }
+  if (/not configured|configuration|storage setup|protection is not configured/.test(issue)) {
+    return { title: 'Finish the PasteBox setup', intro: 'The website does not have the public function settings it needs, or the backend is missing required configuration.', steps: ['Check the repository setup guide for the required GitHub Pages build variables and Supabase Function secrets.', 'After changing GitHub Pages variables, trigger a new Pages build so the settings are included in the published site.', 'If the site settings are correct, check the Supabase Edge Function logs and confirm the function is deployed. Do not add secret keys to frontend variables.'] }
+  }
+  if (/expired|invalid|link can.t be opened|share link/.test(issue)) {
+    return { title: 'Check the share link', intro: 'Share links work for six hours and stop working if they are expired or revoked.', steps: ['Make sure you opened the complete PasteBox link, including the part after the # symbol.', 'If the link is older than six hours, ask the sender to upload the file again and send a new link.', 'If it was revoked, the sender must create a new share.'] }
+  }
+  if (/checksum|did not match|integrity/.test(issue)) {
+    return { title: 'Retry the file transfer', intro: 'PasteBox could not verify that the transfer matches the uploaded file.', steps: ['Retry once on a stable network connection.', 'Check that the device has enough free storage.', 'If verification fails again, ask the sender to create a new share and download it again.'] }
+  }
+  if (/copy was blocked|clipboard|copy/.test(issue)) {
+    return { title: 'Copy the link another way', intro: 'The browser did not allow PasteBox to write to the clipboard.', steps: ['Use the visible share link or the address bar and select the full link manually.', 'Allow clipboard access for this site if your browser asks.', 'On a restricted device, copy the link using the browser or operating-system copy command.'] }
+  }
+  if (/revoke/.test(issue)) {
+    return { title: 'Troubleshoot revoking this share', intro: 'Revoking a share requires the private revoke key created with the upload.', steps: ['Use the private revoke key shown with that upload; it is different from the share link.', 'If the key was lost, it cannot be recovered. The file will still expire automatically after six hours.', 'If the share is already revoked or expired, it is no longer available.'] }
+  }
+  if (/download/.test(issue)) {
+    return { title: 'Troubleshoot the download', intro: 'Downloads are available only while the share link is active.', steps: ['Check the expiry countdown and confirm the device has enough free storage.', 'Retry on a stable network that can reach the Supabase file-service domain.', 'If the link expired or the download repeatedly fails, ask the sender to create a fresh share.'] }
+  }
+  if (/share was unavailable/.test(issue)) {
+    return { title: 'Share the link manually', intro: 'This browser or device does not support its native share sheet right now.', steps: ['Choose Copy link and paste it into your messaging app.', 'If copying is blocked, select and copy the link text manually.', 'The recipient needs the complete link to open the file.'] }
+  }
+  return { title: 'Try the request again', intro: 'PasteBox could not finish that action.', steps: ['Check your connection and try again.', 'For a share link, make sure it has not expired or been revoked.', 'If the problem continues, note the message and check the PasteBox setup guide or Supabase Function logs.'] }
+}
+
+function ErrorNotice({ message, onGetHelp }: { message: string; onGetHelp: (message: string) => void }) {
+  return <div className="message error error-notice" role="alert">
+    <p>{message}</p>
+    <button type="button" className="inline-help" onClick={() => onGetHelp(message)}>Get help</button>
+  </div>
+}
+
 async function fileChecksum(file: Blob) {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
@@ -100,6 +141,8 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [now, setNow] = useState(Date.now())
   const [error, setError] = useState('')
+  const [helpError, setHelpError] = useState('')
+  const helpDialog = useRef<HTMLDialogElement>(null)
   const [copied, setCopied] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -109,6 +152,11 @@ function App() {
     ? `${window.location.origin}${import.meta.env.BASE_URL}#share=${encodeURIComponent(shareToken)}`
     : ''
   const expired = Boolean(sharedFile && new Date(sharedFile.expiresAt).getTime() <= now)
+  const helpGuide = helpError ? errorHelpGuide(helpError) : null
+
+  useEffect(() => {
+    if (helpError && helpDialog.current && !helpDialog.current.open) helpDialog.current.showModal()
+  }, [helpError])
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000)
@@ -377,7 +425,7 @@ function App() {
         </aside>
       </section>
 
-      {!online && <p className="service-note offline-note" role="status">You’re offline. Selected files stay in this page; reconnect to continue.</p>}
+      {!online && <div className="service-note offline-note help-note" role="status"><span>You’re offline. Selected files stay in this page; reconnect to continue.</span><button type="button" className="inline-help" onClick={() => setHelpError('You appear to be offline. Reconnect to the internet, then retry.')}>Get help</button></div>}
 
       {!isSharePage ? (
         <section className="workspace" aria-label="Upload a file">
@@ -451,8 +499,8 @@ function App() {
                 <p>Anyone with a share link can download its file. Links can be forwarded. PasteBox does not scan files, and downloaded copies stay with recipients after the PasteBox copy expires.</p>
             </div>
 
-            {!storageReady && <p className="service-note" role="status">Storage setup is not finished. The upload will be available when the public function URL and publishable key are configured.</p>}
-            {error && <div className="error-group"><p className="message error" role="alert">{error}</p>{selected.length > 0 && !uploading && <p className="retry-hint">{selected.length} {selected.length === 1 ? 'file is' : 'files are'} still selected. Retry when ready.</p>}</div>}
+            {!storageReady && <div className="service-note help-note" role="status"><span>Storage setup is not finished. The upload will be available when the public function URL and publishable key are configured.</span><button type="button" className="inline-help" onClick={() => setHelpError('File storage is not configured yet.')}>Get help</button></div>}
+            {error && <div className="error-group"><ErrorNotice message={error} onGetHelp={setHelpError} />{selected.length > 0 && !uploading && <p className="retry-hint">{selected.length} {selected.length === 1 ? 'file is' : 'files are'} still selected. Retry when ready.</p>}</div>}
 
             {uploading && (
               <div className="progress-block" role="status" aria-live="polite">
@@ -506,7 +554,7 @@ function App() {
                 </div>
               </article>
 
-              {error && <p className="message error" role="alert">{error}</p>}
+              {error && <ErrorNotice message={error} onGetHelp={setHelpError} />}
               <div className="share-actions">
                 <button className="download-button" type="button" onClick={downloadFile} disabled={downloading || expired}>
                   {downloading ? 'Verifying download…' : 'Download file'} <span aria-hidden="true">↓</span>
@@ -521,6 +569,7 @@ function App() {
               <p className="step-label">SHARE LINK UNAVAILABLE</p>
               <h2>{error ? 'This link can’t be opened.' : 'This share has expired.'}</h2>
               <p>{error || 'Files are available for six hours after upload. Ask the sender to create a new link.'}</p>
+              <button type="button" className="inline-help expired-help" onClick={() => setHelpError(error || 'This share has expired.')}>Get help with this link</button>
               {error && <button className="text-button retry-share" type="button" disabled={loadingShare || !online} onClick={() => { setError(''); setShareAttempt(attempt => attempt + 1) }}>{loadingShare ? 'Checking link…' : 'Try checking the link again'}</button>}
               <button className="submit-button" type="button" onClick={leaveSharePage}>Back to PasteBox <span aria-hidden="true">↗</span></button>
             </div>
@@ -532,6 +581,18 @@ function App() {
         <span>50 MB max per file · Any file format</span>
         <span>Share links expire after 6 hours</span>
       </footer>
+      <dialog className="help-dialog" ref={helpDialog} onClose={() => setHelpError('')} aria-labelledby="help-title">
+        {helpGuide && <div className="help-content">
+          <p className="step-label">PASTEBOX <span>/</span> QUICK HELP</p>
+          <h2 id="help-title">{helpGuide.title}</h2>
+          <p className="help-intro">{helpGuide.intro}</p>
+          <ol>{helpGuide.steps.map(step => <li key={step}>{step}</li>)}</ol>
+          <div className="help-actions">
+            <button type="button" className="text-button" onClick={() => helpDialog.current?.close()}>Close and retry</button>
+            <a href="https://github.com/nullinam/PASTEBOX/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noreferrer">Setup guide <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>}
+      </dialog>
     </main>
   )
 }
