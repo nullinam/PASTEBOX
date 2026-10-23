@@ -104,6 +104,21 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .service-note, .message { margin: 14px 0 0; padding: 10px 12px; border-radius: 7px; font-size: 11px; line-height: 1.55; }
 .service-note { border: 1px solid #eee2c7; background: #fffbf1; color: #786039; }
 .message.error { border: 1px solid #f0d5da; background: #fff4f6; color: #9e2e47; animation: state-enter .2s ease-out both; }
+.error-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.error-notice p { margin: 0; }
+.inline-help { flex: 0 0 auto; padding: 5px 8px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; font-size: 10px; font-weight: 600; text-decoration: none; }
+.inline-help:hover { background: #ffffffa8; }
+.help-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.help-dialog { width: min(100% - 32px, 470px); max-height: min(80vh, 680px); padding: 25px; overflow-y: auto; border: 1px solid #e8e1dc; border-radius: 14px; background: #fffdfa; color: var(--ink); box-shadow: 0 24px 90px #201a1933; animation: state-enter .18s ease-out both; }
+.help-dialog::backdrop { background: #24201dcc; backdrop-filter: blur(3px); }
+.help-content h2 { margin: 9px 0 0; font: 700 24px/1.2 var(--serif); letter-spacing: -.04em; }
+.help-intro { margin: 9px 0 0; color: #77736d; font-size: 12px; line-height: 1.6; }
+.help-content ol { display: grid; gap: 12px; margin: 19px 0 0; padding-left: 22px; color: #494640; font-size: 12px; line-height: 1.6; }
+.help-content li { padding-left: 4px; }
+.help-content li::marker { color: var(--accent); font-weight: 700; }
+.help-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 22px; padding-top: 15px; border-top: 1px solid #f0eee9; }
+.help-actions a { color: #6d3040; font-size: 11px; font-weight: 600; }
+.expired-help { margin: -5px 0 16px; }
 .error-group { animation: state-enter .2s ease-out both; }
 .error-group .message { margin-bottom: 0; }
 .retry-hint { margin: 6px 0 0; color: #77736d; font-size: 10px; line-height: 1.5; }
