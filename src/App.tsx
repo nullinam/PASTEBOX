@@ -15,7 +15,6 @@ type ApiResponse = {
   file?: SharedFile
   ok?: boolean
   stats?: { downloads: number; status: string }
-  usage?: { active_files: number; active_bytes: number; total_downloads: number; estimated_egress_bytes: number; pending_cleanup: number }
   downloadUrl?: string
 }
 
@@ -89,9 +88,6 @@ function App() {
   const [selected, setSelected] = useState<File[]>([])
   const [createdShares, setCreatedShares] = useState<CreatedShare[]>([])
   const [revoking, setRevoking] = useState('')
-  const [ownerOpen, setOwnerOpen] = useState(false)
-  const [ownerKey, setOwnerKey] = useState('')
-  const [ownerUsage, setOwnerUsage] = useState<ApiResponse['usage'] | null>(null)
   const [shareStats, setShareStats] = useState<Record<string, number>>({})
   const [shareToken, setShareToken] = useState(parseShareToken)
   const [sharedFile, setSharedFile] = useState<SharedFile | null>(null)
@@ -312,23 +308,6 @@ function App() {
     }
   }
 
-  async function loadOwnerUsage() {
-    try {
-      const result = await postJson({ action: 'owner-usage' }, undefined, { 'x-owner-key': ownerKey })
-      setOwnerUsage(result.usage ? {
-        active_files: Number(result.usage.active_files),
-        active_bytes: Number(result.usage.active_bytes),
-        total_downloads: Number(result.usage.total_downloads),
-        estimated_egress_bytes: Number(result.usage.estimated_egress_bytes),
-        pending_cleanup: Number(result.usage.pending_cleanup),
-      } : null)
-      setError('')
-    } catch (cause) {
-      setOwnerUsage(null)
-      setError(readableError(cause, 'Usage is temporarily unavailable.'))
-    }
-  }
-
   async function shareNative(url: string) {
     if (navigator.share) {
       try { await navigator.share({ title: 'PasteBox file', url }) }
@@ -378,15 +357,7 @@ function App() {
           <span>PasteBox</span>
         </a>
         <span className="top-note"><span className="status-dot" /> LINK-ONLY FILE SHARING</span>
-        <button className="owner-toggle" type="button" onClick={() => setOwnerOpen(open => !open)}>Owner</button>
       </header>
-
-      {ownerOpen && <section className="owner-panel" aria-label="Owner usage">
-        <label htmlFor="owner-key">Owner access key</label>
-        <input id="owner-key" type="password" value={ownerKey} onChange={event => setOwnerKey(event.target.value)} autoComplete="off" />
-        <button type="button" onClick={loadOwnerUsage} disabled={!ownerKey}>View usage</button>
-        {ownerUsage && <p>{ownerUsage.active_files} active files · {prettySize(ownerUsage.active_bytes)} stored · {ownerUsage.total_downloads} downloads · ~{prettySize(ownerUsage.estimated_egress_bytes)} estimated egress · {ownerUsage.pending_cleanup} awaiting cleanup</p>}
-      </section>}
 
       <section className="intro" aria-labelledby="page-title">
         <div className="intro-copy">
