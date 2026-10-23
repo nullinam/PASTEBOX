@@ -33,11 +33,6 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font: 800 19px/1 var(--serif); letter-spacing: -.8px; }
 .brand-mark { width: 30px; height: 30px; display: block; border-radius: 9px; }
 .top-note { display: inline-flex; align-items: center; gap: 9px; color: #77756f; font-size: 10px; font-weight: 600; letter-spacing: .11em; }
-.owner-toggle { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #69655f; cursor: pointer; font-size: 10px; }
-.owner-panel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #69655f; font-size: 10px; }
-.owner-panel input { min-width: 180px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; }
-.owner-panel button { padding: 8px 11px; border: 0; border-radius: 5px; background: var(--ink); color: white; cursor: pointer; font-size: 10px; }
-.owner-panel p { flex-basis: 100%; margin: 0; }
 .status-dot { width: 7px; height: 7px; display: inline-block; flex: 0 0 auto; border-radius: 50%; background: #58906b; box-shadow: 0 0 0 3px #e6efe8; }
 
 .intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; padding: 64px 0 31px; }
@@ -189,9 +184,6 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 @media (max-width: 520px) {
   .page-shell { width: min(100% - 30px, 440px); }
   .top-note { gap: 7px; font-size: 8px; letter-spacing: .08em; }
-  .owner-toggle { min-height: 42px; padding: 8px 10px; font-size: 10px; }
-  .owner-panel { align-items: stretch; }
-  .owner-panel input { min-width: 0; flex: 1; }
   .created-share-actions { gap: 7px 8px; }
   .intro { position: relative; display: block; padding: 43px 0 27px; }
   .intro h1 { margin-top: 15px; font-size: clamp(42px, 12.5vw, 54px); letter-spacing: -.07em; }
